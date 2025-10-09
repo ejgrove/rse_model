@@ -2,7 +2,7 @@ import numpy as np
 from scipy.signal import fftconvolve
 from tqdm import tqdm
 from src import kernels
-from .viz import plot_simulation
+from .visualization import plot_simulation
 from .params import ModelParams
 
 ### Nonlinear (Sigmoidal)Firing Rate
@@ -74,6 +74,8 @@ def run_simulation(N, A, T, Se, Si, TimeDuration, seed, p: ModelParams):
     # Stimulation (for plotting)
     StimE = []
     StimI = []
+    
+    plots = {}
 
     # Time Steps
     steps = int(TimeDuration/p.dt)
@@ -98,16 +100,18 @@ def run_simulation(N, A, T, Se, Si, TimeDuration, seed, p: ModelParams):
             StimE.append(p.Ge * S(t * p.dt, A, T, p))
             StimI.append(p.Gi * S(t * p.dt, A, T, p))
 
-        # Show plot at intervals every 500 ms
-        if t*p.dt != 0 and t*p.dt % 1000 == 0:
+        # Show plot at intervals
+        if t*p.dt != 0 and t*p.dt % 100 == 0:
             
-            values = {"t": t,
-                    "Ue": Ue, 
-                    "Ui": Ui, 
-                    "time": time, 
-                    "pointE": pointE, 
-                    "pointI": pointI, 
-                    "StimE": StimE, 
-                    "StimI": StimI}
-
-            return values
+            plots[t*p.dt] = {
+                            "t": t,
+                            "Ue": Ue.copy(),        # NumPy array copy
+                            "Ui": Ui.copy(),
+                            "time": list(time),     # or time.copy()
+                            "pointE": list(pointE),
+                            "pointI": list(pointI),
+                            "StimE": list(StimE),
+                            "StimI": list(StimI),
+            }
+        
+    return plots

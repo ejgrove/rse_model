@@ -97,5 +97,6 @@ def plot_simulation(t, Ue, Ui, time, pointE, pointI, StimE, StimI, Se, Si, A, T,
                     "Ne:{} ".format(p.Ne)+
                     "Ni:{} ".format(p.Ni)+
                     "V: {} ".format(p.V))
-        
+
         return fig  # let caller decide whether to show() or savefig()
+    
