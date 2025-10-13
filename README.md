@@ -9,8 +9,8 @@ The original paper:
 
 ## Installation
 
-    git clone <https://github.com/ejgrove/rse_model.git>
-    cd <rse_model>
+    git clone https://github.com/ejgrove/rse_model.git
+    cd rse_model
     conda env create -f environment.yml
     conda activate rse-model
 
