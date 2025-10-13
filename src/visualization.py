@@ -1,8 +1,14 @@
-from matplotlib import pyplot as plt
+import os
 import matplotlib.gridspec as gridspec
 import numpy as np
+import imageio.v2 as imageio
+import re
+from pathlib import Path
+from tqdm import tqdm
+from matplotlib import pyplot as plt
 from scipy.ndimage import map_coordinates
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 from .params import ModelParams
 from .kernels import K
 
@@ -29,16 +35,49 @@ def retinal_transform(input_img):
     y_in = theta_scaled * (height)
 
     # Map the input image onto the output grid
-    transformed_img = map_coordinates(input_img, [y_in, x_in], order=2, mode='grid-wrap')
+    transformed_img = map_coordinates(input_img, [y_in, x_in],
+                                      order=2, mode='grid-wrap')
 
     return transformed_img
 
+from pathlib import Path
+import re
 
-def plot_simulation(t, Ue, Ui, time, pointE, pointI, StimE, StimI, Se, Si, A, T, N, contours,
-                    p: ModelParams):
-    
-        # Cortical Activity
-        cortical_activity = np.abs(Ue - Ui)
+def ensure_unique_path(
+    p,
+    width: int = 3,
+    start: int = 1,
+    suffix_re = re.compile(r"_(\d+)$")   # match trailing _<digits> at end of *stem*
+) -> Path:
+    """
+    If 'p' exists, append or increment a _NNN suffix until a free path is found.
+    Example sequence: plot.png -> plot_001.png -> plot_002.png -> ...
+    - width: zero-pad width for the numeric suffix.
+    - start: starting number when no suffix is present.
+    - suffix_re: pattern used to detect an existing numeric suffix in the stem.
+    """
+    p = Path(p)
+    parent, stem, suffix = p.parent, p.stem, p.suffix
+
+    m = suffix_re.search(stem)
+    if m:
+        base = stem[:m.start()]
+        n = max(int(m.group(1)), start - 1)  # don't go backwards
+    else:
+        base = stem
+        n = start - 1
+
+    candidate = p
+    while candidate.exists():
+        n += 1
+        candidate = parent / f"{base}_{n:0{width}d}{suffix}"
+    return candidate
+
+
+def make_plot(t, cortical_activity, time, pointE, pointI, StimE, 
+              StimI, Se, Si, A, T, N, contours, cmap,
+              p: ModelParams,
+              ):
     
         ret_cortical_activity = retinal_transform(cortical_activity)
 
@@ -58,13 +97,13 @@ def plot_simulation(t, Ue, Ui, time, pointE, pointI, StimE, StimI, Se, Si, A, T,
         ax1.set_xlabel('Time (ms)')
         ax1.legend(handles=[pointE_plot, pointI_plot], loc='upper right')
 
-        cortical_plot = ax2.contourf(cortical_activity, contours, cmap='plasma')
+        cortical_plot = ax2.contourf(cortical_activity, contours, cmap=cmap)
         ax2.set_title('Cortical View')
         ax2.axis('equal')
         ax2.axis('off')
 
         retinal_plot = ax3.contourf(ret_cortical_activity, contours,
-                      cmap='plasma')
+                      cmap=cmap)
         ax3.set_title('Retinal View')
         ax3.axis('equal')
         ax3.axis('off')
@@ -78,7 +117,7 @@ def plot_simulation(t, Ue, Ui, time, pointE, pointI, StimE, StimI, Se, Si, A, T,
         x = np.arange(-20, 21, 1)
         K_plotE, = ax5.plot(x, K(x, 0, Se),label='E')
         K_plotI, = ax5.plot(x, K(x, 0, Si), label='I')
-        ax5.set_ylabel('Connectivity Factor')
+        ax5.set_ylabel('Kernel \n Connectivity Factor')
         ax5.set_xlabel('x')
         ax5.legend(handles=[K_plotE,K_plotI])
 
@@ -87,16 +126,104 @@ def plot_simulation(t, Ue, Ui, time, pointE, pointI, StimE, StimI, Se, Si, A, T,
 
         fig.colorbar(cortical_plot, cax=cax)
 
-        fig.suptitle("2d FFT Conv - {} ms - ".format(round(t*p.dt))+
+        fig.suptitle("{} ms - ".format(round(t*p.dt))+
                     "A:{} ".format(round(A,2))+
                     "T:{} ".format(T)+
                     "Se:{} ".format(round(Se,2))+
                     "Si:{} ".format(round(Si,2))+
                     "dt:{} ".format(p.dt)+
                     "N:{} ".format(N)+
-                    "Ne:{} ".format(p.Ne)+
-                    "Ni:{} ".format(p.Ni)+
                     "V: {} ".format(p.V))
 
-        return fig  # let caller decide whether to show() or savefig()
+        return fig
     
+def make_images(t, cortical_activity, time, Se, images,
+                Si, A, T, N, contours, out_path, dpi,
+                label, cmap, p: ModelParams, **_ignore
+                ):
+    
+        label_text = "{} ms - ".format(round(t*p.dt)) \
+                        + "A:{} ".format(round(A,2)) \
+                        + "T:{} ".format(T) \
+                        + "Se:{} ".format(round(Se,2)) \
+                        + "Si:{} ".format(round(Si,2)) \
+                        + "dt:{} ".format(p.dt) \
+                        + "N:{} ".format(N) \
+                        + "V: {} ".format(p.V)
+
+        ret_cortical_activity = retinal_transform(cortical_activity)
+
+        if images in ("cortical", "both"):
+            fig = plt.figure(tight_layout=True, figsize=(10,10))
+
+            plt.contourf(cortical_activity, contours, cmap=cmap)
+            plt.axis('equal')
+            plt.axis('off')
+            
+            if label:
+                plt.suptitle(label_text)
+                
+            filename = os.path.join(out_path, f"cortical_{round(t*p.dt)}ms.png")
+            plt.savefig(filename, bbox_inches='tight', dpi=dpi)
+            
+        if images in ("retinal", "both"):
+            fig = plt.figure(tight_layout=True, figsize=(10,10))
+            
+            plt.contourf(ret_cortical_activity, contours, cmap=cmap)
+            plt.axis('equal')
+            plt.axis('off')
+
+            if label:
+                plt.suptitle(label_text)
+
+            filename = os.path.join(out_path, f"retinal_{round(t*p.dt)}ms.png")
+            plt.savefig(filename, bbox_inches='tight', dpi=dpi)
+
+def make_gif(data, Se, Si, A, T, N, contours, cmap, out_path, label, dpi,
+             p: ModelParams, fps=50,
+             ):
+        
+        frames = []
+        temp_dir = "frames_temp"
+        os.makedirs(temp_dir, exist_ok=True)
+
+        for i, (t, values) in tqdm(enumerate(data.items()), total=len(data)):
+        
+            # Cortical Activity
+            cortical_activity = values['cortical_activity']
+            ret_cortical_activity = retinal_transform(cortical_activity)
+
+            # Plotting
+            fig = plt.figure(tight_layout=True, figsize=(10,10))
+            plt.contourf(ret_cortical_activity, contours, cmap=cmap)
+                                        # vmin=global_min, vmax=global_max)
+            plt.axis('equal')
+            plt.axis('off')
+
+            if label == True:
+                plt.title("{} s".format(round(t/1000, 1))) 
+                plt.suptitle("A:{} ".format(round(A,2))+
+                            "T:{} ".format(T)+
+                            "Se:{} ".format(round(Se,2))+
+                            "Si:{} ".format(round(Si,2))+
+                            "dt:{} ".format(p.dt)+
+                            "N:{} ".format(N)+
+                            "V: {} ".format(p.V))
+                
+            frame_path = os.path.join(temp_dir, f"frame_{i:04d}.png")
+            plt.savefig(frame_path, bbox_inches='tight', dpi=dpi)
+            frames.append(imageio.imread(frame_path))
+            plt.close(fig)
+        
+        print("Saving GIF...")
+            
+        # Combine frames into a GIF with simulation-accurate timing
+        imageio.mimsave(os.path.join(out_path, "simulation.gif"), frames, 
+                        duration=1000/fps, loop=0) # duration in seconds per frame
+        
+        print(f"GIF saved")
+        
+        # Clean up
+        for f in os.listdir(temp_dir):
+            os.remove(os.path.join(temp_dir, f))
+        os.rmdir(temp_dir)

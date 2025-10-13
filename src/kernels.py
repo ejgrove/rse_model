@@ -1,5 +1,6 @@
 import numpy as np
 
+## Gaussian Kernel
 def K(x, y, S):
     ''' This function is not exactly the square of the gaussian (exponent should be
     multiplied by 1/2 in real square) but Ermentrout said to use this...
@@ -15,5 +16,8 @@ def generate_gaussian_kernel(sigma, size):
     y = np.arange(size//2, -size//2, -1)
     X, Y = np.meshgrid(x, y)
     kernel = K(X, Y, sigma)
+    
+    # Apply fft
+    np.fft.fft2(np.array(kernel), axes=(0,1))
 
     return kernel

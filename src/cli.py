@@ -1,48 +1,116 @@
 import argparse
-import time
+import os
+import re
+from pathlib import Path
+
 from .model import run_simulation
-from .visualization import plot_simulation
+from .visualization import make_plot, make_gif, make_images, \
+    ensure_unique_path
 from .params import ModelParams
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--N", type=int, default=101) # Neural Field Size
-    ap.add_argument("--Time", type=int, default=1000) # Time Duration of Simulation (ms)
-    ap.add_argument("--A", type=float, default=0.7) # Flicker Amplittude
-    ap.add_argument("--T", type=float, default=115) # Flicker Period (ms)
-    ap.add_argument("--Se", type=float, default=2.0) # Excitatory Spatial Spread
-    ap.add_argument("--Si", type=float, default=5.0) # Inhibitory Spatial Spread
-    ap.add_argument("--seed", type=int, default=42) # Random Seed
-    ap.add_argument("--out", type=str, default='outputs/simulation.png') # Output file prefix
+    
+    ### Model Parameters
+    ap.add_argument("--grid-size", type=int, default=101) # Neural field size
+    ap.add_argument("--A", type=float, default=0.7) # Amplitude
+    ap.add_argument("--T", type=float, default=115) # Period (ms)
+    ap.add_argument("--Se", type=float, default=2.0) # Excitatory Kernel Std Dev
+    ap.add_argument("--Si", type=float, default=5.0) # Inhibitory Kernel Std Dev
+
+    ### Simulation Parameters
+    ap.add_argument("--seed", type=int, default=None) # Random seed
+    ap.add_argument("--start", type=int, default=0) # Time (ms) to start saving outputs
+    ap.add_argument("--end", type=int, default=2000) # Time (ms) to end saving outputs
+    ap.add_argument("--interval", type=int, default=1000) # Time interval (ms) for saving outputs
+
+    ### Visualization Parameters
+    ap.add_argument("--plot", action='store_true') # Save plot of simulation images, stimulation, activity, and connectivity
+    ap.add_argument("--images", type=str, default=None) # Save images of simulation ("retinal", "cortical", or "both")
+    ap.add_argument("--contours", type=int, default=50) # Number of contours for visualization
+    ap.add_argument("--cmap", type=str, default='plasma') # Matplotlib colormap
+    ap.add_argument("--dpi", type=int, default=100) # Matplotlib dpi (image resolution)
+    ap.add_argument("--out-path", type=str, default='outputs') # Output directory
+    
+    ### GIF Parameters
+    ap.add_argument("--gif", action='store_true') # Whether to save gif of simulation
+    ap.add_argument("--fps", type=int, default=50) # Frames per second for gif
+    ap.add_argument("--label", action='store_true') # Whether to add label to gif
+
     args = ap.parse_args()
     
+    if args.gif or (args.images is not None) or args.plot:
+        file_suffix = (
+            f"simulation_A{str(args.A).replace('.', '_')}"
+            f"_T{str(round(args.T)).replace('.', '_')}"
+            f"_Se{str(round(args.Se)).replace('.', '_')}"
+            f"_Si{str(round(args.Si)).replace('.', '_')}"
+            f"_N{str(args.grid_size)}"
+        )
 
-    data = run_simulation(N=args.N, 
-                            A=args.A, 
-                            T=args.T, 
-                            Se=args.Se, 
-                            Si=args.Si, 
-                            TimeDuration=args.Time,
-                            seed=args.seed,
-                            p=ModelParams())
+        out_path = os.path.join(args.out_path, file_suffix)
+        out_path = ensure_unique_path(out_path)
+        os.makedirs(out_path, exist_ok=False)
+
+    print(out_path
+          )
+    params = {"N": args.grid_size,
+              "A": args.A,
+              "T": args.T,
+              "Se": args.Se,
+              "Si": args.Si,
+              "p": ModelParams()
+              }
     
-    for t, values in data.items():
-        
-        print("t:", t)
+    vis_params = {"contours": args.contours,
+                    "cmap": args.cmap,
+                }
 
-        print(len(values["time"]))
-        print(len(values["pointE"]))
-        
-        fig = plot_simulation(**values,
-                            contours=50,
-                            Se=args.Se,
-                            Si=args.Si,
-                            A=args.A,
-                            T=args.T,
-                            N=args.N,
-                            p=ModelParams())
+    data = run_simulation(**params,
+                        seed=args.seed,
+                        gif= args.gif,
+                        interval=args.interval,
+                        start_time= args.start,
+                        end_time= args.end,
+                        )
 
-        fig.savefig(f"{args.out.split('.')[0]}_{t}.png", dpi=200)
+    if args.gif:
+        make_gif(data["gif"], 
+                 label=args.label,
+                 out_path=out_path,
+                 fps=args.fps,
+                 dpi=args.dpi,
+                 **params,
+                 **vis_params
+                 )
+        
+    if args.images != None or args.plot:
+        print("Generating images and/or plots...")
+        for t, values in data["images"].items():
+            if args.plot:
+                plot_dir = os.path.join(out_path, "plots")
+                os.makedirs(plot_dir, exist_ok=True)
+                
+                fig = make_plot(**values,
+                                **params,
+                                **vis_params
+                                )
+
+                fig.savefig(os.path.join(plot_dir,
+                    f"plot_{round(t)}ms.png"), dpi=100)
+
+            if args.images != None:
+                plot_dir = os.path.join(out_path, "images")
+                os.makedirs(plot_dir, exist_ok=True)
+                
+                make_images(**values,
+                            images=args.images,
+                            label=args.label,
+                            out_path=plot_dir,
+                            dpi=args.dpi,
+                            **params,
+                            **vis_params
+                            )
 
 if __name__ == "__main__":
     main()
