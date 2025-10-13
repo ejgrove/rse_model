@@ -24,16 +24,19 @@ Run the simulation script in the CLI, or test out the notebook ```demo.ipynb```.
 
 CLI demo
 ```
-# Minimal run (time in ms unless stated otherwise)
-python -m src.cli --Time 5000 --images both
+# Generate cortical and retinal images
+# --end sets the duration of the simulation in ms
+# --images specifies whether to output the retinal, cortical, or both images
+python -m src.cli --end 5000 --images both
 
-# Save periodic snapshots and a GIF (GIF timing is 10 ms granularity)
-python -m src.cli --Time 5000 --gif --fps 30 --out out/sim.gif
+# Generate a GIF
+# --fps (frames/second)
+python -m src.cli --end 5000 --gif --fps 30
 ```
 
 - Try period (T) ranges 50–60 to produce roll planiforms and 110–130 for spots
 - Adjust the size of the neural field (N) to see how it effects the formation of the patterns
-- See [```cli.py```](src/cli.py) for all parameters
+- See [```cli.py```](src/cli.py) for description of all parameters
 
 ## Example outputs
 
@@ -41,13 +44,13 @@ python -m src.cli --Time 5000 --gif --fps 30 --out out/sim.gif
 
 <img src="assets/images/cortical_8000ms.png" alt="Cortical Plot" width="350"> <img src="assets/images/retinal_8000ms.png" alt="Retinal Plot" width="350">
 
-(python -m src.cli --interval 8000 --end 8000 --images both --label --grid-size 200)
+```python -m src.cli --interval 8000 --end 8000 --images both --label --grid-size 200```
 
 ### Plots
 
 <img src="assets/plots/plot_8000ms.png" alt="" width="500">
 
-(python -m src.cli --interval 8000 --end 8000 --plot --label --grid-size 200)
+```python -m src.cli --interval 8000 --end 8000 --plot --label --grid-size 200```
 
 ### Gifs 
 
