@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.signal import fftconvolve
 from tqdm import tqdm
 
 from .params import ModelParams

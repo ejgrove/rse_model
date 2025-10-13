@@ -1,3 +1,0 @@
-TODO
-- reduce kernel sidelengths to a percentage of the cortical grid
-- create gif
