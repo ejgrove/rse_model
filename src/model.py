@@ -81,7 +81,6 @@ def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, gif, interval, p
 
     # Time Steps
     steps = int((end_time + p.dt)/p.dt)
-    print(steps)
     
     for t in tqdm(range(steps)):
 
