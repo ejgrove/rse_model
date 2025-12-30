@@ -1,19 +1,45 @@
+"""Model parameter definitions.
+
+Defines `~rse_model.params.ModelParams`, a frozen
+dataclass containing default constants used throughout the simulation.
+"""
+
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ModelParams:
-    """Parameters for the RSE model."""
-    
-    ''' Increasing Number of nodes (neural populations) increases spatial frequency
-    however beyond ~250 the forms won't fully develop'''
+    """Parameters for the RSE model.
 
-    """
-    
-    # Number node on side of neural field (must be odd for fft transform)
+    Notes
+    -----
+    Increasing the number of nodes (neural populations) increases spatial
+    frequency; however beyond roughly ``N ~ 250`` the forms may not fully develop.
 
-    # Spatial Connectivity Constants - Rule et al. 2011
-    Se: float = 2
-    Si: float = 2.5 * Se
+    Attributes
+    ----------
+    dt : float
+        Time step in milliseconds.
+    Te : float
+        Excitatory time constant (Rule et al. 2011).
+    Ti : float
+        Inhibitory time constant (Rule et al. 2011).
+    Aee, Aei, Aie, Aii : float
+        Connection strengths between neural populations (Rule et al. 2011).
+    He : float
+        Excitatory firing threshold/bias (Rule et al. 2011).
+    Hi : float
+        Inhibitory firing threshold/bias (Rule et al. 2011).
+    Ge : float
+        Gain on stimulation / input drive for excitatory population.
+    Gi : float
+        Gain on stimulation / input drive for inhibitory population.
+    Ne : float
+        Excitatory noise strength (Rule et al. 2011).
+    Ni : float
+        Inhibitory noise strength (Rule et al. 2011).
+    V : float
+        Threshold on the sinusoid controlling the effective duty cycle of the
+        stimulus (Rule et al. 2011).
     """
 
     # Timestep (ms)

@@ -1,3 +1,11 @@
+#!/usr/bin/env python
+
+"""Command-line interface for running RSE model simulations.
+
+This module defines the CLI used to configure model parameters, execute a
+simulation, and generate plots, images, and GIF outputs.
+"""
+
 import argparse
 import os
 import re
@@ -8,11 +16,41 @@ from .visualization import make_plot, make_gif, make_images, \
     ensure_unique_path
 from .params import ModelParams
 
+
+def odd_positive_int(value: str) -> int:
+    """Parse an integer and coerce it to an odd positive value. 
+    Necessary for the model to center kernels correctly.
+
+    Parameters
+    ----------
+    value : str
+        CLI argument value.
+
+    Returns
+    -------
+    int
+        An odd integer computed as ``(n // 2) * 2 + 1``.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If ``value`` cannot be parsed as an integer or is not positive.
+    """
+    try:
+        n = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"Invalid integer: {value!r}") from exc
+
+    if n <= 0:
+        raise argparse.ArgumentTypeError("N must be a positive integer")
+
+    return (n // 2) * 2 + 1
+
 def main():
     ap = argparse.ArgumentParser()
     
     ### Model Parameters
-    ap.add_argument("--grid-size", type=int, default=101) # Neural field size
+    ap.add_argument("--N", type=odd_positive_int, default=101) # Neural field size (forced odd)
     ap.add_argument("--A", type=float, default=0.7) # Amplitude
     ap.add_argument("--T", type=float, default=115) # Period (ms)
     ap.add_argument("--Se", type=float, default=2.0) # Excitatory Kernel Std Dev
@@ -39,22 +77,24 @@ def main():
 
     args = ap.parse_args()
     
+    # Create output path
     if args.gif or (args.images is not None) or args.plot:
         file_suffix = (
             f"simulation_A{str(args.A).replace('.', '_')}"
             f"_T{str(round(args.T)).replace('.', '_')}"
             f"_Se{str(round(args.Se)).replace('.', '_')}"
             f"_Si{str(round(args.Si)).replace('.', '_')}"
-            f"_N{str(args.grid_size)}"
+            f"_N{str(args.N)}"
         )
 
         out_path = os.path.join(args.out_path, file_suffix)
         out_path = ensure_unique_path(out_path)
         os.makedirs(out_path, exist_ok=False)
+        
+        print(f"Outputs will be saved to: {out_path}")
 
-    print(out_path
-          )
-    params = {"N": args.grid_size,
+    # Simulation parameter dict
+    params = {"N": args.N,
               "A": args.A,
               "T": args.T,
               "Se": args.Se,
@@ -62,10 +102,12 @@ def main():
               "p": ModelParams()
               }
     
+    # Visualization params dict
     vis_params = {"contours": args.contours,
                     "cmap": args.cmap,
                 }
 
+    # Run simulation
     data = run_simulation(**params,
                         seed=args.seed,
                         gif= args.gif,
@@ -73,7 +115,7 @@ def main():
                         start_time= args.start,
                         end_time= args.end,
                         )
-
+    # Generate GIF
     if args.gif:
         make_gif(data["gif"], 
                  label=args.label,
@@ -83,7 +125,8 @@ def main():
                  **params,
                  **vis_params
                  )
-        
+    
+    # Generate images and/or plots
     if args.images != None or args.plot:
         print("Generating images and/or plots...")
         for t, values in data["images"].items():
