@@ -2,6 +2,7 @@
 """
 
 import numpy as np
+import scipy
 
 ## Gaussian Kernel
 def gaussian_kernel_2d(x, y, sigma):
@@ -54,8 +55,5 @@ def generate_gaussian_kernel(sigma, N):
     y = np.arange(-(N//2), (N//2) + 1, 1)
     X, Y = np.meshgrid(x, y)
     kernel = gaussian_kernel_2d(X, Y, sigma)
-    
-    # Apply fft
-    np.fft.fft2(np.array(kernel), axes=(0,1))
 
     return kernel

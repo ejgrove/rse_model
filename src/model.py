@@ -6,6 +6,7 @@ produces time-indexed outputs for visualization.
 """
 
 import numpy as np
+import scipy
 from tqdm import tqdm
 
 from .params import ModelParams
@@ -42,10 +43,10 @@ def fft_convolution(U, k_fft):
         Convolved activity matrix.
     """
     # Perform FFT on the inputs
-    u_fft = np.fft.fft2(U, axes=(0,1))
+    u_fft = np.fft.rfft2(U, axes=(0,1), s=(U.shape))
     u_fft *= k_fft
 
-    return np.real(np.fft.ifft2(u_fft, axes=(0,1))) # Perform element-wise multiplication in Fourier space (frequency domain)
+    return np.fft.irfft2(u_fft, axes=(0,1), s=(U.shape)) # Perform element-wise multiplication in Fourier space (frequency domain)
 
 def step_function(x):
     """Compute a Heaviside-like step function.
@@ -126,17 +127,20 @@ def step(A, T, t, N, Ue, Ui, Ke, Ki, rng: np.random.Generator, p: ModelParams):
     Uec = fft_convolution(Ue, Ke)
     Uic = fft_convolution(Ui, Ki)
 
-    # Euler's Method of Finding Activity Rate of Change
-    dUe = (p.dt/p.Te)*(-Ue + firing_rate(p.Aee*Uec-p.Aie*Uic-p.He+p.Ge*strobe_stimulus(t, A, T, p)+p.Ne*noise_E))
-    dUi = (p.dt/p.Ti)*(-Ui + firing_rate(p.Aei*Uec-p.Aii*Uic-p.Hi+p.Gi*strobe_stimulus(t, A, T, p)+p.Ni*noise_I))
+    ## Strobe Stimulus
+    stim = strobe_stimulus(t, A, T, p)
 
+    # Euler's Method of Finding Activity Rate of Change
+    dUe = (p.dt/p.Te)*(-Ue + firing_rate(p.Aee*Uec-p.Aie*Uic-p.He+p.Ge*stim+p.Ne*noise_E))
+    dUi = (p.dt/p.Ti)*(-Ui + firing_rate(p.Aei*Uec-p.Aii*Uic-p.Hi+p.Gi*stim+p.Ni*noise_I))
+    
     # Updating Neural Field Activities
     Ue += dUe
     Ui += dUi
     
     return Ue, Ui
 
-def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, gif, interval, p: ModelParams, fps=50):
+def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, plot, gif, interval, p: ModelParams, fps=50):
     """Run the neural field simulation.
 
     Parameters
@@ -157,6 +161,8 @@ def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, gif, interval, p
         End time in milliseconds.
     seed : int or None
         Random seed for reproducibility.
+    plot : bool
+        Whether to generate plot.
     gif : bool
         Whether to record frames for GIF output.
     interval : int
@@ -185,8 +191,8 @@ def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, gif, interval, p
     Ki = generate_gaussian_kernel(Si, N)
     
     # Precompute FFT of kernels
-    Ke = np.fft.fft2(Ke, axes=(0,1))
-    Ki = np.fft.fft2(Ki, axes=(0,1))
+    Ke = scipy.fft.rfft2(Ke, s=(Ue.shape))
+    Ki = scipy.fft.rfft2(Ki, s=(Ui.shape))
 
     # Time interval to record activity for plots
     plotting_range = range(start_time, end_time + 1, 1)
@@ -213,10 +219,10 @@ def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, gif, interval, p
     gif_every_steps = int(round((1000 / fps) / dt))
 
     # Total number of simulation steps
-    steps = int(round((end_time - start_time) / dt))
+    steps = int(round(end_time / dt))
 
     # Main Simulation Loop
-    for step_idx in range(steps + 1):
+    for step_idx in tqdm(range(steps + 1)):
         
         # Current time (ms)
         t = step_idx * dt
@@ -224,25 +230,26 @@ def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, gif, interval, p
         # Update Neural Field Activities
         Ue, Ui = step(A, T, t, N, Ue, Ui, Ke, Ki, rng, p)
         
-        # Calculate Cortical Activity
-        cortical_activity = np.abs(Ue - Ui)
+        if plot:
+            # Saving Point Activities (2,2 was chosen arbitrarily)
+            pointE.append(float(Ue[2, 2]))
+            pointI.append(float(Ui[2, 2]))
 
-        # Saving Point Activities (2,2 was chosen arbitrarily)
-        pointE.append(float(Ue[2, 2]))
-        pointI.append(float(Ui[2, 2]))
+            # Saving Time
+            time.append(t)
 
-        # Saving Time
-        time.append(t)
-
-        # Saving Strobe Stimulation
-        StimE.append(p.Ge * strobe_stimulus(t, A, T, p))
-        StimI.append(p.Gi * strobe_stimulus(t, A, T, p))
+            # Saving Strobe Stimulation
+            StimE.append(p.Ge * strobe_stimulus(t, A, T, p))
+            StimI.append(p.Gi * strobe_stimulus(t, A, T, p))
         
         # Check if time step is in plotting range and at specified interval 
         # to save plots
         if step_idx != 0 and \
             step_idx % plot_every_steps == 0 and \
-            int(t) in plotting_range:
+            (start_time <= t <= end_time):
+                
+            # Calculate Cortical Activity
+            cortical_activity = np.abs(Ue - Ui)
             
             plots["images"][t] = {
                 "t": t,
@@ -253,16 +260,19 @@ def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, gif, interval, p
                 "StimE": list(StimE),
                 "StimI": list(StimI),
             }
-            
+        
         # Save frames for GIF at specified fps
         if gif and \
             step_idx % gif_every_steps == 0 and \
             int(t) in plotting_range:
+                
+                    # Calculate Cortical Activity
+            cortical_activity = np.abs(Ue - Ui)
 
             plots["gif"][t] = {
                 "t": t,
                 "cortical_activity": cortical_activity.copy(), # NumPy array copy
                 "time": list(time)
             }
-            
+    
     return plots

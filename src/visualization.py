@@ -18,7 +18,7 @@ from scipy.ndimage import map_coordinates
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from .params import ModelParams
-from .kernels import K
+from .kernels import generate_gaussian_kernel
 
 ### Retinoptic Mapping
 def retinal_transform(input_img):
@@ -170,7 +170,7 @@ def make_plot(t, cortical_activity, time, pointE, pointI, StimE,
     ret_cortical_activity = retinal_transform(cortical_activity)
 
     # Plotting
-    fig = plt.figure(tight_layout=True, figsize=(10,10))
+    fig = plt.figure(tight_layout=True, figsize=(4,4))
     gs = gridspec.GridSpec(5, 2)
 
     ax1 = fig.add_subplot(gs[2, :])
@@ -276,7 +276,7 @@ def make_images(t, cortical_activity, time, Se, images,
     """
 
     label_text = (
-        "{} ms - ".format(round(t * p.dt))
+        "{} ms - ".format(round(t))
         + "A:{} ".format(round(A, 2))
         + "T:{} ".format(T)
         + "Se:{} ".format(round(Se, 2))
@@ -289,30 +289,44 @@ def make_images(t, cortical_activity, time, Se, images,
     ret_cortical_activity = retinal_transform(cortical_activity)
 
     if images in ("cortical", "both"):
-        plt.figure(tight_layout=True, figsize=(10,10))
+        fig = plt.figure(tight_layout=bool(label), figsize=(4, 4))
 
         plt.contourf(cortical_activity, contours, cmap=cmap)
         plt.axis('equal')
         plt.axis('off')
+        if not label:
+            fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
 
         if label:
             plt.suptitle(label_text)
 
-        filename = os.path.join(out_path, f"cortical_{round(t * p.dt)}ms.png")
-        plt.savefig(filename, bbox_inches='tight', dpi=dpi)
+        filename = os.path.join(out_path, f"cortical_{round(t * p.dt)}ms_N{N}.png")
+        filename = ensure_unique_path(filename)
+        save_kwargs = {"bbox_inches": "tight", "dpi": dpi}
+        if not label:
+            save_kwargs["pad_inches"] = 0
+        plt.savefig(filename, **save_kwargs)
+        plt.close(fig)
 
     if images in ("retinal", "both"):
-        plt.figure(tight_layout=True, figsize=(10,10))
+        fig = plt.figure(tight_layout=bool(label), figsize=(4, 4))
 
         plt.contourf(ret_cortical_activity, contours, cmap=cmap)
         plt.axis('equal')
         plt.axis('off')
+        if not label:
+            fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
 
         if label:
             plt.suptitle(label_text)
 
-        filename = os.path.join(out_path, f"retinal_{round(t * p.dt)}ms.png")
-        plt.savefig(filename, bbox_inches='tight', dpi=dpi)
+        filename = os.path.join(out_path, f"retinal_{round(t * p.dt)}ms_N{N}.png")
+        filename = ensure_unique_path(filename)
+        save_kwargs = {"bbox_inches": "tight", "dpi": dpi}
+        if not label:
+            save_kwargs["pad_inches"] = 0
+        plt.savefig(filename, **save_kwargs)
+        plt.close(fig)
 
 def make_gif(data, Se, Si, A, T, N, contours, cmap, out_path, label, dpi,
              p: ModelParams, fps=50,
@@ -373,7 +387,7 @@ def make_gif(data, Se, Si, A, T, N, contours, cmap, out_path, label, dpi,
         ret_cortical_activity = retinal_transform(cortical_activity)
 
         # Plotting
-        fig = plt.figure(tight_layout=True, figsize=(10,10))
+        fig = plt.figure(tight_layout=True, figsize=(4, 4))
         plt.contourf(ret_cortical_activity, contours, cmap=cmap)
         # vmin=global_min, vmax=global_max)
         plt.axis('equal')
