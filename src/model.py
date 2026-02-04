@@ -7,7 +7,9 @@ produces time-indexed outputs for visualization.
 
 import numpy as np
 import scipy
+import timeit
 from tqdm import tqdm
+from scipy.special import expit
 
 from .params import ModelParams
 from .kernels import generate_gaussian_kernel
@@ -25,7 +27,7 @@ def firing_rate(x):
     array_like
         Firing rate with the same shape as ``x``.
     """
-    return 1 / (1 + np.exp(-x))
+    return expit(x)
 
 def fft_convolution(U, k_fft):
     """Convolve neural field activity with a kernel using FFTs.
@@ -43,10 +45,10 @@ def fft_convolution(U, k_fft):
         Convolved activity matrix.
     """
     # Perform FFT on the inputs
-    u_fft = np.fft.rfft2(U, axes=(0,1), s=(U.shape))
+    u_fft = scipy.fft.rfft2(U, axes=(0,1), s=(U.shape))
     u_fft *= k_fft
 
-    return np.fft.irfft2(u_fft, axes=(0,1), s=(U.shape)) # Perform element-wise multiplication in Fourier space (frequency domain)
+    return scipy.fft.irfft2(u_fft, axes=(0,1), s=(U.shape)) # Perform element-wise multiplication in Fourier space (frequency domain)
 
 def step_function(x):
     """Compute a Heaviside-like step function.
@@ -86,7 +88,7 @@ def strobe_stimulus(t, A, T, p: ModelParams):
     """
     return A*step_function(np.sin((2*np.pi*t)/T)-p.V)
 
-def step(A, T, t, N, Ue, Ui, Ke, Ki, rng: np.random.Generator, p: ModelParams):
+def step(A, T, t, N, Ue, Ui, Ke, Ki, rng: np.random.Generator, noise_field, p: ModelParams):
     """Advance the neural field state by one Euler time step.
 
     Parameters
@@ -109,6 +111,8 @@ def step(A, T, t, N, Ue, Ui, Ke, Ki, rng: np.random.Generator, p: ModelParams):
         FFT of the inhibitory connectivity kernel.
     rng : numpy.random.Generator
         Random number generator used to sample noise fields.
+    noise_field : numpy.ndarray
+        Preallocated noise field array.
     p : ModelParams
         Model parameters (e.g., ``dt``, time constants, gains, thresholds, and
         connection strengths).
@@ -119,13 +123,32 @@ def step(A, T, t, N, Ue, Ui, Ke, Ki, rng: np.random.Generator, p: ModelParams):
         Updated ``(Ue, Ui)`` arrays.
     """
     
+    dtype = Ue.dtype
+    
+    t3 = timeit.default_timer()
+    
+    if noise_field is None:
+        # one allocation, generates both E/I noise at once
+        noise = rng.standard_normal((2, N, N), dtype=dtype)
+    else:
+        rng.standard_normal(size=noise_field.shape, dtype=noise_field.dtype, out=noise_field)
+        noise = noise_field
+    
     # Create new noise matrices for each neural field
-    noise_E = rng.normal(loc=0.0, scale=1.0, size=(N, N))
-    noise_I = rng.normal(loc=0.0, scale=1.0, size=(N, N))
+    noise_E = noise[0]
+    noise_I = noise[1]
+    
+    t4 = timeit.default_timer()
+    elapsed_noise_time = t4 - t3
+    #print(f"Noise generation took {elapsed_noise_time:.6f} seconds")
 
     ## Convolve matrices
     Uec = fft_convolution(Ue, Ke)
     Uic = fft_convolution(Ui, Ki)
+    
+    t5 = timeit.default_timer()
+    elapsed_conv_time = t5 - t4
+    #print(f"Convolution took {elapsed_conv_time:.6f} seconds")
 
     ## Strobe Stimulus
     stim = strobe_stimulus(t, A, T, p)
@@ -138,9 +161,15 @@ def step(A, T, t, N, Ue, Ui, Ke, Ki, rng: np.random.Generator, p: ModelParams):
     Ue += dUe
     Ui += dUi
     
+    t6 = timeit.default_timer()
+    elapsed_euler_time = t6 - t5
+    #print(f"Euler step took {elapsed_euler_time:.6f} seconds")
+    
+    #print(f"Total step time: {t6 - t3:.6f} seconds")
+    
     return Ue, Ui
 
-def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, plot, gif, interval, p: ModelParams, fps=50):
+def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, plot, gif, interval, p: ModelParams, fps=50, dtype=np.float32):
     """Run the neural field simulation.
 
     Parameters
@@ -183,12 +212,12 @@ def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, plot, gif, inter
     rng = np.random.default_rng(seed)
 
     # Initializing Random Activity Rates (Uniform Distribution between 0 and 1)
-    Ue = rng.random((N, N))
-    Ui = rng.random((N, N))
-
+    Ue = rng.random((N, N)).astype(dtype, copy=False)
+    Ui = rng.random((N, N)).astype(dtype, copy=False)
+    
     # Connectivity Kernels
-    Ke = generate_gaussian_kernel(Se, N)
-    Ki = generate_gaussian_kernel(Si, N)
+    Ke = generate_gaussian_kernel(Se, N).astype(dtype, copy=False)
+    Ki = generate_gaussian_kernel(Si, N).astype(dtype, copy=False)
     
     # Precompute FFT of kernels
     Ke = scipy.fft.rfft2(Ke, s=(Ue.shape))
@@ -196,6 +225,9 @@ def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, plot, gif, inter
 
     # Time interval to record activity for plots
     plotting_range = range(start_time, end_time + 1, 1)
+    
+    # Preallocate noise
+    noise_field = np.empty((2, N, N), dtype=dtype)
 
     # Initialize list for saving activity at a point (for plotting)
     pointE = []
@@ -226,9 +258,15 @@ def run_simulation(N, A, T, Se, Si, start_time, end_time, seed, plot, gif, inter
         
         # Current time (ms)
         t = step_idx * dt
+        
+        t1 = timeit.default_timer()
 
         # Update Neural Field Activities
-        Ue, Ui = step(A, T, t, N, Ue, Ui, Ke, Ki, rng, p)
+        Ue, Ui = step(A, T, t, N, Ue, Ui, Ke, Ki, rng, noise_field, p)
+        
+        t2 = timeit.default_timer()
+        elapsed_time = t2 - t1
+        #print(f"Step took {elapsed_time:.6f} seconds")
         
         if plot:
             # Saving Point Activities (2,2 was chosen arbitrarily)

@@ -214,7 +214,7 @@ def make_plot(t, cortical_activity, time, pointE, pointI, StimE,
     fig.colorbar(cortical_plot, cax=cax)
 
     fig.suptitle(
-        "{} ms - ".format(round(t * p.dt))
+        "{} ms - ".format(round(t))
         + "A:{} ".format(round(A, 2))
         + "T:{} ".format(T)
         + "Se:{} ".format(round(Se, 2))
@@ -300,7 +300,7 @@ def make_images(t, cortical_activity, time, Se, images,
         if label:
             plt.suptitle(label_text)
 
-        filename = os.path.join(out_path, f"cortical_{round(t * p.dt)}ms_N{N}.png")
+        filename = os.path.join(out_path, f"cortical_{round(t)}ms_N{N}.png")
         filename = ensure_unique_path(filename)
         save_kwargs = {"bbox_inches": "tight", "dpi": dpi}
         if not label:
@@ -320,7 +320,7 @@ def make_images(t, cortical_activity, time, Se, images,
         if label:
             plt.suptitle(label_text)
 
-        filename = os.path.join(out_path, f"retinal_{round(t * p.dt)}ms_N{N}.png")
+        filename = os.path.join(out_path, f"retinal_{round(t)}ms_N{N}.png")
         filename = ensure_unique_path(filename)
         save_kwargs = {"bbox_inches": "tight", "dpi": dpi}
         if not label:

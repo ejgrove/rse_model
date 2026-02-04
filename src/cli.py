@@ -10,6 +10,7 @@ import argparse
 import os
 import random
 import re
+import time
 from pathlib import Path
 
 from .model import run_simulation
@@ -118,6 +119,7 @@ def main():
             
         if args.rand_size is not None:
             N = odd_positive_int(random.randint(args.rand_size[0], args.rand_size[1]))
+            print(N)
         else:
             N = args.N
         
@@ -146,6 +148,7 @@ def main():
                             start_time= args.start,
                             end_time= args.end,
                             )
+        
         # Generate GIF
         if args.gif:
             make_gif(data["gif"], 
