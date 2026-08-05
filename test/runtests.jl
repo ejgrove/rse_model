@@ -13,6 +13,13 @@ end
     @test_throws ArgumentError odd_positive_int(0)
 end
 
+@testset "fast FFT sizes" begin
+    @test is_fast_fft_size(105)
+    @test !is_fast_fft_size(101)
+    @test next_fast_odd_size(101) == 105
+    @test next_fast_odd_size(201) == 225
+end
+
 @testset "model params constructors" begin
     @test ModelParams() isa ModelParams{Float64}
     @test ModelParams{Float32}().dt isa Float32

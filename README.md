@@ -28,6 +28,7 @@ the original Python files available for comparison.
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -e 'using Pkg; Pkg.test()'
 julia --project=. src/cli.jl --interval 8000 --end 8000 --images both --label --N 201
+julia --project=. src/cli.jl --interval 8000 --end 8000 --images both --label --N 101 --fast-n
 ```
 
 The core Julia files are:
@@ -44,6 +45,20 @@ the same forward/inverse FFT plans, and intermediate Fourier arrays are
 preallocated. This preserves the Python model's circular FFT convolution while
 avoiding repeated plan construction and avoiding the extra storage/work of a
 full complex FFT.
+
+FFT grid size matters a lot. Odd sizes with only small prime factors are much
+faster than awkward prime-heavy sizes. Use `--fast-n` to move to the next
+FFT-friendly odd size, for example `101 -> 105` and `201 -> 225`.
+
+```bash
+julia --project=. scripts/benchmark_julia.jl --sizes 101,105,135,201,225 --end 100 --passes 2
+julia --project=. scripts/benchmark_julia.jl --sizes 101,201 --end 100 --passes 2 --fast-n
+```
+
+The benchmark reports `realtime_x`; values above `1.0` mean the simulation loop
+is faster than real time for the default model time step (`dt = 0.2 ms`). For
+these grid sizes, `--fftw-threads 1` is usually fastest because FFT thread
+overhead dominates the small transforms.
 
 ### CLI examples
 

@@ -1,4 +1,5 @@
 using ArgParse
+using FFTW
 using Random
 
 function odd_positive_int(value)
@@ -10,6 +11,25 @@ function odd_positive_int(value)
 
     n > 0 || throw(ArgumentError("N must be a positive integer"))
     return div(n, 2) * 2 + 1
+end
+
+function is_fast_fft_size(n::Integer; factors=(2, 3, 5, 7))
+    n > 0 || return false
+    remaining = n
+    for factor in factors
+        while remaining % factor == 0
+            remaining = div(remaining, factor)
+        end
+    end
+    return remaining == 1
+end
+
+function next_fast_odd_size(value)
+    n = odd_positive_int(value)
+    while !is_fast_fft_size(n)
+        n += 2
+    end
+    return n
 end
 
 function _format_number(value)
@@ -34,6 +54,19 @@ end
 
 _has_values(value) = value !== nothing && !(value isa AbstractVector && isempty(value))
 
+function _fft_plan_flags(value)
+    key = lowercase(value)
+    if key == "estimate"
+        return FFTW.ESTIMATE
+    elseif key == "measure"
+        return FFTW.MEASURE
+    elseif key == "patient"
+        return FFTW.PATIENT
+    else
+        throw(ArgumentError("--fft-plan must be one of: estimate, measure, patient"))
+    end
+end
+
 function _build_parser()
     settings = ArgParseSettings(description="Run RSE model simulations.")
 
@@ -42,6 +75,10 @@ function _build_parser()
             help = "Neural field size. Values are coerced to the next odd positive integer."
             arg_type = Int
             default = 101
+        "--fast-n"
+            help = "Increase N to the next odd FFT-friendly size with only small prime factors."
+            action = :store_true
+            dest_name = "fast_n"
         "--A"
             help = "Stimulus amplitude."
             arg_type = Float64
@@ -127,6 +164,16 @@ function _build_parser()
         "--label"
             help = "Write label metadata alongside generated images."
             action = :store_true
+        "--fft-plan"
+            help = "FFTW planning mode: estimate, measure, or patient."
+            arg_type = String
+            default = "measure"
+            dest_name = "fft_plan"
+        "--fftw-threads"
+            help = "Number of FFTW threads. For small grids, 1 is usually fastest."
+            arg_type = Int
+            default = 1
+            dest_name = "fftw_threads"
     end
 
     return settings
@@ -169,6 +216,13 @@ end
 function main(argv=ARGS)
     args = parse_args(argv, _build_parser())
     args["N"] = odd_positive_int(args["N"])
+    if args["fast_n"]
+        requested_N = args["N"]
+        args["N"] = next_fast_odd_size(requested_N)
+        if args["N"] != requested_N
+            println("Adjusted N from $(requested_N) to FFT-friendly size $(args["N"]).")
+        end
+    end
     args["images"] = _validate_images(args["images"])
 
     if args["interval"] <= 0
@@ -180,7 +234,12 @@ function main(argv=ARGS)
     if args["fps"] <= 0
         throw(ArgumentError("--fps must be positive"))
     end
+    if args["fftw_threads"] <= 0
+        throw(ArgumentError("--fftw-threads must be positive"))
+    end
 
+    FFTW.set_num_threads(args["fftw_threads"])
+    fft_flags = _fft_plan_flags(args["fft_plan"])
     out_path = _prepare_output_dir(args)
     seed = args["seed"]
 
@@ -193,7 +252,7 @@ function main(argv=ARGS)
 
         N = if _has_values(args["rand_size"])
             low, high = args["rand_size"]
-            randomized_N = odd_positive_int(rand(low:high))
+            randomized_N = args["fast_n"] ? next_fast_odd_size(rand(low:high)) : odd_positive_int(rand(low:high))
             println(randomized_N)
             randomized_N
         else
@@ -217,6 +276,7 @@ function main(argv=ARGS)
             interval=args["interval"],
             p=params,
             fps=args["fps"],
+            fft_flags=fft_flags,
         )
 
         if args["gif"]

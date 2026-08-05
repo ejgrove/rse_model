@@ -2,6 +2,8 @@ using FFTW
 using LinearAlgebra
 using Random
 
+const DEFAULT_FFT_FLAGS = FFTW.MEASURE
+
 firing_rate(x) = inv(one(x) + exp(-x))
 
 function step_function(x)
@@ -20,16 +22,17 @@ struct FFTConvolver{T,P,Q}
     work::Matrix{Complex{T}}
 end
 
-function FFTConvolver(kernel::Matrix{T}, template::Matrix{T}; flags=FFTW.ESTIMATE) where {T<:AbstractFloat}
-    forward_plan = plan_rfft(template, (1, 2); flags=flags)
-    work = forward_plan * template
-    inverse_plan = plan_irfft(work, size(template, 1), (1, 2); flags=flags)
+function FFTConvolver(kernel::Matrix{T}, template::Matrix{T}; flags=DEFAULT_FFT_FLAGS) where {T<:AbstractFloat}
+    plan_input = zeros(T, size(template))
+    forward_plan = plan_rfft(plan_input, (1, 2); flags=flags)
+    plan_work = forward_plan * plan_input
+    inverse_plan = plan_irfft(similar(plan_work), size(template, 1), (1, 2); flags=flags)
     kernel_fft = forward_plan * kernel
     return FFTConvolver{T,typeof(forward_plan),typeof(inverse_plan)}(
         forward_plan,
         inverse_plan,
         kernel_fft,
-        similar(work),
+        similar(plan_work),
     )
 end
 
@@ -56,7 +59,7 @@ Base.@kwdef struct SimulationOutput{T<:AbstractFloat}
 end
 
 function _rng(seed)
-    return seed === nothing ? Random.default_rng() : MersenneTwister(seed)
+    return seed === nothing ? Random.default_rng() : Xoshiro(seed)
 end
 
 function _params_as(::Type{T}, p::ModelParams) where {T<:AbstractFloat}
@@ -131,6 +134,7 @@ function run_simulation(;
     p::ModelParams,
     fps::Integer=50,
     dtype::Type{F}=Float32,
+    fft_flags=DEFAULT_FFT_FLAGS,
 ) where {F<:AbstractFloat}
     pT = _params_as(dtype, p)
     rng = _rng(seed)
@@ -140,8 +144,8 @@ function run_simulation(;
 
     Ke = generate_gaussian_kernel(Se, N; dtype=dtype)
     Ki = generate_gaussian_kernel(Si, N; dtype=dtype)
-    excitatory_convolver = FFTConvolver(Ke, Ue)
-    inhibitory_convolver = FFTConvolver(Ki, Ui)
+    excitatory_convolver = FFTConvolver(Ke, Ue; flags=fft_flags)
+    inhibitory_convolver = FFTConvolver(Ki, Ui; flags=fft_flags)
     Uec = similar(Ue)
     Uic = similar(Ui)
     noise = Array{F}(undef, 2, N, N)
