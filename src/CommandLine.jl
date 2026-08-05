@@ -54,6 +54,24 @@ end
 
 _has_values(value) = value !== nothing && !(value isa AbstractVector && isempty(value))
 
+function _validate_backend(value)
+    key = lowercase(value)
+    key in ("cpu", "metal") && return key
+    throw(ArgumentError("--backend must be cpu or metal"))
+end
+
+function _validate_convolution(value, backend)
+    key = lowercase(value)
+    key in ("auto", "fft", "separable") || throw(ArgumentError("--conv must be auto, fft, or separable"))
+    if key == "auto"
+        return backend == "metal" ? :separable : :fft
+    elseif key == "separable" && backend != "metal"
+        throw(ArgumentError("--conv separable is currently implemented for the Metal backend only"))
+    else
+        return Symbol(key)
+    end
+end
+
 function _fft_plan_flags(value)
     key = lowercase(value)
     if key == "estimate"
@@ -79,6 +97,22 @@ function _build_parser()
             help = "Increase N to the next odd FFT-friendly size with only small prime factors."
             action = :store_true
             dest_name = "fast_n"
+        "--backend"
+            help = "Simulation backend: cpu or metal."
+            arg_type = String
+            default = "cpu"
+        "--gpu"
+            help = "Shortcut for --backend metal."
+            action = :store_true
+        "--conv"
+            help = "Convolution backend: auto, fft, or separable. Auto uses separable on Metal."
+            arg_type = String
+            default = "auto"
+        "--kernel-cutoff"
+            help = "Gaussian cutoff in sigma units for Metal separable convolution."
+            arg_type = Float64
+            default = 2.0
+            dest_name = "kernel_cutoff"
         "--A"
             help = "Stimulus amplitude."
             arg_type = Float64
@@ -174,6 +208,11 @@ function _build_parser()
             arg_type = Int
             default = 1
             dest_name = "fftw_threads"
+        "--gpu-threads"
+            help = "Metal kernel threadgroup size for the fused Euler update."
+            arg_type = Int
+            default = 256
+            dest_name = "gpu_threads"
     end
 
     return settings
@@ -214,6 +253,7 @@ function _prepare_output_dir(args)
 end
 
 function main(argv=ARGS)
+    cli_timer_start = time_ns()
     args = parse_args(argv, _build_parser())
     args["N"] = odd_positive_int(args["N"])
     if args["fast_n"]
@@ -224,6 +264,8 @@ function main(argv=ARGS)
         end
     end
     args["images"] = _validate_images(args["images"])
+    args["backend"] = args["gpu"] ? "metal" : _validate_backend(args["backend"])
+    convolution = _validate_convolution(args["conv"], args["backend"])
 
     if args["interval"] <= 0
         throw(ArgumentError("--interval must be positive"))
@@ -237,8 +279,16 @@ function main(argv=ARGS)
     if args["fftw_threads"] <= 0
         throw(ArgumentError("--fftw-threads must be positive"))
     end
+    if args["gpu_threads"] <= 0
+        throw(ArgumentError("--gpu-threads must be positive"))
+    end
+    if args["kernel_cutoff"] <= 0
+        throw(ArgumentError("--kernel-cutoff must be positive"))
+    end
 
-    FFTW.set_num_threads(args["fftw_threads"])
+    if args["backend"] == "cpu"
+        FFTW.set_num_threads(args["fftw_threads"])
+    end
     fft_flags = _fft_plan_flags(args["fft_plan"])
     out_path = _prepare_output_dir(args)
     seed = args["seed"]
@@ -277,6 +327,15 @@ function main(argv=ARGS)
             p=params,
             fps=args["fps"],
             fft_flags=fft_flags,
+            backend=Symbol(args["backend"]),
+            gpu_threads=args["gpu_threads"],
+            convolution=convolution,
+            kernel_cutoff=args["kernel_cutoff"],
+        )
+        println(
+            "Simulation compute duration ($(args["backend"])): ",
+            round(data.compute_seconds; digits=4),
+            " s",
         )
 
         if args["gif"]
@@ -346,5 +405,6 @@ function main(argv=ARGS)
         end
     end
 
+    println("Total command duration: ", round((time_ns() - cli_timer_start) / 1e9; digits=4), " s")
     return nothing
 end

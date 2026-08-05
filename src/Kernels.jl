@@ -20,3 +20,21 @@ function generate_gaussian_kernel(sigma, N::Integer; dtype::Type{T}=Float32) whe
 
     return kernel
 end
+
+function generate_gaussian_kernel_1d(
+    sigma,
+    radius::Integer;
+    dtype::Type{T}=Float32,
+) where {T<:AbstractFloat}
+    radius >= 0 || throw(ArgumentError("radius must be non-negative."))
+    kernel = Vector{T}(undef, 2 * radius + 1)
+    s = T(sigma)
+    norm_factor = inv(sqrt(T(pi)) * s)
+
+    for idx in eachindex(kernel)
+        x = T(idx - radius - 1)
+        kernel[idx] = norm_factor * exp(-(x^2) / s^2)
+    end
+
+    return kernel
+end

@@ -29,6 +29,7 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -e 'using Pkg; Pkg.test()'
 julia --project=. src/cli.jl --interval 8000 --end 8000 --images both --label --N 201
 julia --project=. src/cli.jl --interval 8000 --end 8000 --images both --label --N 101 --fast-n
+julia --project=. src/cli.jl --gpu --interval 8000 --end 8000 --images both --label --N 101 --fast-n
 ```
 
 The core Julia files are:
@@ -59,6 +60,30 @@ The benchmark reports `realtime_x`; values above `1.0` mean the simulation loop
 is faster than real time for the default model time step (`dt = 0.2 ms`). For
 these grid sizes, `--fftw-threads 1` is usually fastest because FFT thread
 overhead dominates the small transforms.
+
+## Julia Metal GPU
+The Metal backend runs on Apple Silicon GPUs through Metal.jl:
+
+```bash
+julia --project=. src/cli.jl --gpu --N 101 --fast-n --end 10000 --interval 10000 --images both
+julia --project=. scripts/benchmark_julia.jl --gpu --sizes 105,225,315 --end 100 --passes 2
+```
+
+The CLI prints both synchronized simulation compute time and total command time.
+The first GPU run includes Julia and Metal compilation, so use the second
+benchmark pass for steady-state speed estimates.
+
+By default, `--gpu` uses `--conv auto`, which selects the Metal separable
+Gaussian convolution path with `--kernel-cutoff 2`. This is the speed-first path
+for real-time experiments. It approximates the full circular FFT convolution by
+truncating the separable Gaussian tail. Use `--conv fft` for the exact FFT
+baseline, or `--kernel-cutoff 4` for a more conservative separable approximation.
+
+Representative warmed timings on Apple M4 Pro:
+
+- `--gpu --conv separable --kernel-cutoff 2`, `N=105`: about `0.08 ms/step`, `2.5x` real time.
+- `--gpu --conv separable --kernel-cutoff 2`, `N=225`: about `0.18 ms/step`, `1.1x` real time.
+- `--gpu --conv fft`, `N=225`: about `0.61 ms/step`, `0.33x` real time.
 
 ### CLI examples
 
