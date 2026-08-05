@@ -1,0 +1,290 @@
+using ArgParse
+using Random
+
+function odd_positive_int(value)
+    n = try
+        parse(Int, string(value))
+    catch exc
+        throw(ArgumentError("Invalid integer: $(repr(value))"))
+    end
+
+    n > 0 || throw(ArgumentError("N must be a positive integer"))
+    return div(n, 2) * 2 + 1
+end
+
+function _format_number(value)
+    text = string(value)
+    return replace(text, "." => "_")
+end
+
+function _format_rounded(value)
+    rounded = round(value)
+    return _format_number(rounded == round(Int, value) ? round(Int, value) : rounded)
+end
+
+function _uniform_between(low, high)
+    return rand() * (high - low) + low
+end
+
+function _validate_images(images)
+    images === nothing && return nothing
+    images in ("cortical", "retinal", "both") && return images
+    throw(ArgumentError("--images must be one of: cortical, retinal, both"))
+end
+
+_has_values(value) = value !== nothing && !(value isa AbstractVector && isempty(value))
+
+function _build_parser()
+    settings = ArgParseSettings(description="Run RSE model simulations.")
+
+    @add_arg_table! settings begin
+        "--N"
+            help = "Neural field size. Values are coerced to the next odd positive integer."
+            arg_type = Int
+            default = 101
+        "--A"
+            help = "Stimulus amplitude."
+            arg_type = Float64
+            default = 0.7
+        "--T"
+            help = "Stimulus period in ms."
+            arg_type = Float64
+            default = 115.0
+        "--Se"
+            help = "Excitatory kernel standard deviation."
+            arg_type = Float64
+            default = 2.0
+        "--Si"
+            help = "Inhibitory kernel standard deviation."
+            arg_type = Float64
+            default = 5.0
+
+        "--seed"
+            help = "Random seed."
+            arg_type = Int
+            default = nothing
+        "--start"
+            help = "Time in ms to start saving outputs."
+            arg_type = Int
+            default = 0
+        "--end"
+            help = "Time in ms to end saving outputs."
+            arg_type = Int
+            default = 2000
+        "--interval"
+            help = "Time interval in ms for saving outputs."
+            arg_type = Int
+            default = 1000
+        "--num-sims"
+            help = "Number of simulations to run."
+            arg_type = Int
+            default = 1
+            dest_name = "num_sims"
+        "--rand-freq"
+            help = "Randomize T in [T - rand_freq, T + rand_freq]."
+            arg_type = Int
+            default = nothing
+            dest_name = "rand_freq"
+        "--rand-size"
+            help = "Randomize N in the inclusive integer range [low, high]."
+            arg_type = Int
+            nargs = 2
+            default = nothing
+            dest_name = "rand_size"
+
+        "--plot"
+            help = "Save a compact cortical/retinal summary plot."
+            action = :store_true
+        "--images"
+            help = "Save images of the simulation: cortical, retinal, or both."
+            arg_type = String
+            default = nothing
+        "--contours"
+            help = "Number of contours for compatibility with the Python CLI."
+            arg_type = Int
+            default = 50
+        "--cmap"
+            help = "Colormap name. Supports plasma, nipy_spectral, and grayscale."
+            arg_type = String
+            default = "plasma"
+        "--dpi"
+            help = "Image DPI metadata placeholder for CLI compatibility."
+            arg_type = Int
+            default = 100
+        "--out-path"
+            help = "Output directory."
+            arg_type = String
+            default = "outputs"
+            dest_name = "out_path"
+
+        "--gif"
+            help = "Save a retinal-view GIF."
+            action = :store_true
+        "--fps"
+            help = "Frames per second for GIF sampling."
+            arg_type = Int
+            default = 50
+        "--label"
+            help = "Write label metadata alongside generated images."
+            action = :store_true
+    end
+
+    return settings
+end
+
+function _prepare_output_dir(args)
+    if !(args["gif"] || args["images"] !== nothing || args["plot"])
+        return nothing
+    end
+
+    T_str = if args["rand_freq"] !== nothing
+        low = round(args["T"]) - args["rand_freq"]
+        high = round(args["T"]) + args["rand_freq"]
+        string(_format_number(low), "to", _format_number(high))
+    else
+        _format_rounded(args["T"])
+    end
+
+    N_str = if _has_values(args["rand_size"])
+        low, high = args["rand_size"]
+        string(_format_number(round(low)), "to", _format_number(round(high)))
+    else
+        string(args["N"])
+    end
+
+    file_suffix = string(
+        "simulation_A", _format_number(args["A"]),
+        "_T", T_str,
+        "_Se", _format_rounded(args["Se"]),
+        "_Si", _format_rounded(args["Si"]),
+        "_N", N_str,
+    )
+
+    out_path = ensure_unique_path(joinpath(args["out_path"], file_suffix))
+    mkpath(out_path)
+    println("Outputs will be saved to: ", out_path)
+    return out_path
+end
+
+function main(argv=ARGS)
+    args = parse_args(argv, _build_parser())
+    args["N"] = odd_positive_int(args["N"])
+    args["images"] = _validate_images(args["images"])
+
+    if args["interval"] <= 0
+        throw(ArgumentError("--interval must be positive"))
+    end
+    if args["end"] < args["start"]
+        throw(ArgumentError("--end must be greater than or equal to --start"))
+    end
+    if args["fps"] <= 0
+        throw(ArgumentError("--fps must be positive"))
+    end
+
+    out_path = _prepare_output_dir(args)
+    seed = args["seed"]
+
+    for _sim in 1:args["num_sims"]
+        period = if args["rand_freq"] !== nothing
+            _uniform_between(args["T"] - args["rand_freq"], args["T"] + args["rand_freq"])
+        else
+            args["T"]
+        end
+
+        N = if _has_values(args["rand_size"])
+            low, high = args["rand_size"]
+            randomized_N = odd_positive_int(rand(low:high))
+            println(randomized_N)
+            randomized_N
+        else
+            args["N"]
+        end
+
+        println(N)
+
+        params = ModelParams()
+        data = run_simulation(
+            N=N,
+            A=args["A"],
+            T=period,
+            Se=args["Se"],
+            Si=args["Si"],
+            start_time=args["start"],
+            end_time=args["end"],
+            seed=seed,
+            plot=args["plot"],
+            gif=args["gif"],
+            interval=args["interval"],
+            p=params,
+            fps=args["fps"],
+        )
+
+        if args["gif"]
+            make_gif(
+                data.gif;
+                label=args["label"],
+                out_path=out_path,
+                fps=args["fps"],
+                dpi=args["dpi"],
+                N=N,
+                A=args["A"],
+                T=period,
+                Se=args["Se"],
+                Si=args["Si"],
+                contours=args["contours"],
+                cmap=args["cmap"],
+                p=params,
+            )
+        end
+
+        if args["images"] !== nothing || args["plot"]
+            println("Generating images and/or plots...")
+            for snapshot in data.images
+                if args["plot"]
+                    plot_dir = joinpath(out_path, "plots")
+                    mkpath(plot_dir)
+                    plot_file = joinpath(plot_dir, "plot_$(round(Int, snapshot.t))ms.png")
+                    make_plot(
+                        snapshot;
+                        out_file=plot_file,
+                        N=N,
+                        A=args["A"],
+                        T=period,
+                        Se=args["Se"],
+                        Si=args["Si"],
+                        contours=args["contours"],
+                        cmap=args["cmap"],
+                        p=params,
+                    )
+                end
+
+                if args["images"] !== nothing
+                    image_dir = joinpath(out_path, "images")
+                    mkpath(image_dir)
+                    println(snapshot.t)
+                    make_images(
+                        snapshot;
+                        images=args["images"],
+                        label=args["label"],
+                        out_path=image_dir,
+                        dpi=args["dpi"],
+                        N=N,
+                        A=args["A"],
+                        T=period,
+                        Se=args["Se"],
+                        Si=args["Si"],
+                        contours=args["contours"],
+                        cmap=args["cmap"],
+                        p=params,
+                    )
+                end
+            end
+        end
+
+        if seed !== nothing && seed != 0
+            seed += 1
+        end
+    end
+
+    return nothing
+end

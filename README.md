@@ -20,6 +20,31 @@ The command-line interface [`(cli.py)`](src/cli.py) supports robust and reproduc
 
 **See [```cli.py```](src/cli.py) for description of all parameters**
 
+## Julia CPU Port
+The Julia implementation mirrors the Python command-line options while keeping
+the original Python files available for comparison.
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=. -e 'using Pkg; Pkg.test()'
+julia --project=. src/cli.jl --interval 8000 --end 8000 --images both --label --N 201
+```
+
+The core Julia files are:
+
+- [`src/CommandLine.jl`](src/CommandLine.jl): argument parsing and output routing.
+- [`src/Params.jl`](src/Params.jl): model parameters.
+- [`src/Kernels.jl`](src/Kernels.jl): Gaussian connectivity kernels.
+- [`src/Model.jl`](src/Model.jl): simulation loop and convolution.
+- [`src/Visualization.jl`](src/Visualization.jl): retinal transform, PNG heatmaps, compact plots, and GIF output.
+
+For CPU convolution, the current best baseline is planned real-FFT convolution:
+the kernels are transformed once with `plan_rfft`, each activity field reuses
+the same forward/inverse FFT plans, and intermediate Fourier arrays are
+preallocated. This preserves the Python model's circular FFT convolution while
+avoiding repeated plan construction and avoiding the extra storage/work of a
+full complex FFT.
+
 ### CLI examples
 
 ### Cortical and Retinal images
