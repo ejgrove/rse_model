@@ -255,7 +255,7 @@ function fft_convolution!(out, convolver::MetalFFTConvolver, U)
     return out
 end
 
-function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, n, boundary_code)
+function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, n, boundary_code, fft_origin_shift)
     i = thread_position_in_grid().x
     if i <= n
         row0 = (i - 1) % rows
@@ -265,7 +265,7 @@ function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, 
             offset = Int32(k) - Int32(radius) - Int32(1)
             source_col = Int32(col0) + offset
             if boundary_code == BOUNDARY_PERIODIC
-                source_col0 = mod(source_col, Int32(cols))
+                source_col0 = mod(source_col - Int32(fft_origin_shift), Int32(cols))
                 source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
                 acc += input[source_idx] * kernel[k]
             elseif boundary_code == BOUNDARY_EDGE
@@ -282,7 +282,7 @@ function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, 
     return
 end
 
-function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, n, boundary_code)
+function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, n, boundary_code, fft_origin_shift)
     i = thread_position_in_grid().x
     if i <= n
         row0 = (i - 1) % rows
@@ -292,7 +292,7 @@ function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, 
             offset = Int32(k) - Int32(radius) - Int32(1)
             source_row = Int32(row0) + offset
             if boundary_code == BOUNDARY_PERIODIC
-                source_row0 = mod(source_row, Int32(rows))
+                source_row0 = mod(source_row - Int32(fft_origin_shift), Int32(rows))
                 source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
                 acc += input[source_idx] * kernel[k]
             elseif boundary_code == BOUNDARY_EDGE
@@ -324,6 +324,7 @@ function _metal_conv_cols_pair_kernel!(
     klen_i,
     n,
     boundary_code,
+    fft_origin_shift,
 )
     i = thread_position_in_grid().x
     if i <= n
@@ -335,7 +336,7 @@ function _metal_conv_cols_pair_kernel!(
             offset = Int32(k) - Int32(radius_e) - Int32(1)
             source_col = Int32(col0) + offset
             if boundary_code == BOUNDARY_PERIODIC
-                source_col0 = mod(source_col, Int32(cols))
+                source_col0 = mod(source_col - Int32(fft_origin_shift), Int32(cols))
                 source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
                 acc_e += input_e[source_idx] * kernel_e[k]
             elseif boundary_code == BOUNDARY_EDGE
@@ -354,7 +355,7 @@ function _metal_conv_cols_pair_kernel!(
             offset = Int32(k) - Int32(radius_i) - Int32(1)
             source_col = Int32(col0) + offset
             if boundary_code == BOUNDARY_PERIODIC
-                source_col0 = mod(source_col, Int32(cols))
+                source_col0 = mod(source_col - Int32(fft_origin_shift), Int32(cols))
                 source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
                 acc_i += input_i[source_idx] * kernel_i[k]
             elseif boundary_code == BOUNDARY_EDGE
@@ -386,6 +387,7 @@ function _metal_conv_rows_pair_kernel!(
     klen_i,
     n,
     boundary_code,
+    fft_origin_shift,
 )
     i = thread_position_in_grid().x
     if i <= n
@@ -397,7 +399,7 @@ function _metal_conv_rows_pair_kernel!(
             offset = Int32(k) - Int32(radius_e) - Int32(1)
             source_row = Int32(row0) + offset
             if boundary_code == BOUNDARY_PERIODIC
-                source_row0 = mod(source_row, Int32(rows))
+                source_row0 = mod(source_row - Int32(fft_origin_shift), Int32(rows))
                 source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
                 acc_e += input_e[source_idx] * kernel_e[k]
             elseif boundary_code == BOUNDARY_EDGE
@@ -416,7 +418,7 @@ function _metal_conv_rows_pair_kernel!(
             offset = Int32(k) - Int32(radius_i) - Int32(1)
             source_row = Int32(row0) + offset
             if boundary_code == BOUNDARY_PERIODIC
-                source_row0 = mod(source_row, Int32(rows))
+                source_row0 = mod(source_row - Int32(fft_origin_shift), Int32(rows))
                 source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
                 acc_i += input_i[source_idx] * kernel_i[k]
             elseif boundary_code == BOUNDARY_EDGE
@@ -451,6 +453,10 @@ function separable_convolution!(
     boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
     boundary_x_code = _boundary_code(boundary_x)
     boundary_y_code = _boundary_code(boundary_y)
+    # The reference FFT path uses a centered Gaussian matrix, so periodic
+    # separable convolution needs the same circular origin shift.
+    fft_origin_shift_x = UInt32(boundary_x == :periodic ? div(cols_u, 2) : 0)
+    fft_origin_shift_y = UInt32(boundary_y == :periodic ? div(rows_u, 2) : 0)
     threads = min(gpu_threads, length(U))
     groups = cld(length(U), threads)
 
@@ -464,6 +470,7 @@ function separable_convolution!(
         klen,
         n,
         boundary_x_code,
+        fft_origin_shift_x,
     )
     @metal threads=threads groups=groups _metal_conv_rows_kernel!(
         out,
@@ -475,6 +482,7 @@ function separable_convolution!(
         klen,
         n,
         boundary_y_code,
+        fft_origin_shift_y,
     )
 
     return out
@@ -503,6 +511,9 @@ function separable_convolution_pair!(
     boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
     boundary_x_code = _boundary_code(boundary_x)
     boundary_y_code = _boundary_code(boundary_y)
+    # Match the legacy centered-kernel FFT origin for periodic separable runs.
+    fft_origin_shift_x = UInt32(boundary_x == :periodic ? div(cols_u, 2) : 0)
+    fft_origin_shift_y = UInt32(boundary_y == :periodic ? div(rows_u, 2) : 0)
     threads = min(gpu_threads, length(Ue))
     groups = cld(length(Ue), threads)
 
@@ -521,6 +532,7 @@ function separable_convolution_pair!(
         klen_i,
         n,
         boundary_x_code,
+        fft_origin_shift_x,
     )
     @metal threads=threads groups=groups _metal_conv_rows_pair_kernel!(
         out_e,
@@ -537,6 +549,7 @@ function separable_convolution_pair!(
         klen_i,
         n,
         boundary_y_code,
+        fft_origin_shift_y,
     )
 
     return out_e, out_i

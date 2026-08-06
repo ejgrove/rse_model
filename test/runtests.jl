@@ -177,6 +177,31 @@ end
     end
 end
 
+@testset "metal separable full kernel matches fft alignment" begin
+    if Metal.functional()
+        N = 17
+        U = reshape(Float32.(1:(N * N)), N, N) ./ Float32(N * N)
+        K = generate_gaussian_kernel(2.0, N; dtype=Float32)
+        cpu_out = similar(U)
+        RSEModel.fft_convolution!(cpu_out, RSEModel.FFTConvolver(K, U; flags=FFTW.ESTIMATE), U)
+
+        gpu_U = Metal.MtlArray(U)
+        gpu_out = similar(gpu_U)
+        RSEModel.separable_convolution!(
+            gpu_out,
+            RSEModel.MetalSeparableConvolver(2.0, gpu_U; cutoff=100.0),
+            gpu_U;
+            gpu_threads=128,
+            boundary=:periodic,
+        )
+        Metal.synchronize()
+
+        @test Array(gpu_out) ≈ cpu_out rtol=1e-5 atol=1e-5
+    else
+        @test_skip "Metal.jl is not functional on this machine."
+    end
+end
+
 @testset "retinal transform" begin
     img = reshape(collect(Float32, 1:25), 5, 5)
     ret = retinal_transform(img)
