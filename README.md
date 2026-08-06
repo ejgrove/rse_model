@@ -125,8 +125,10 @@ julia --project=. scripts/parameter_search.jl
 The defaults match the first broad search: `N=81`, `Se=2`, `Si=5`, `50%` duty
 cycle, periodic boundary, cortical view, `T=10:5:150 ms`, `A=0.2:0.1:1.5`, and
 snapshots at `5,10,15,20 s`. Outputs are written to
-`outputs/parameter_search...` as four PNG montages plus `summary.csv` and
-`config.txt`. Each montage has `T` on the x axis and `A` on the y axis.
+`outputs/parameter_search...` as four PNG montages plus `summary.csv`,
+`config.txt`, `grid_map.csv`, and `snapshot_manifest.csv`. Each montage has `T`
+on the x axis and `A` on the y axis, and the CSV files record the exact A/T
+grid-to-tile mapping used to assemble the images.
 
 Useful overrides:
 

@@ -180,7 +180,13 @@ end
     ))
     @test result_path == out_path
     @test isfile(joinpath(out_path, "summary.csv"))
+    @test isfile(joinpath(out_path, "config.txt"))
+    @test isfile(joinpath(out_path, "grid_map.csv"))
+    @test isfile(joinpath(out_path, "snapshot_manifest.csv"))
+    @test !isfile(joinpath(out_path, "summary_progress.csv"))
     @test isfile(joinpath(out_path, "parameter_search_cortical_00010ms.png"))
+    @test occursin("simulation_end_time_ms=10", read(joinpath(out_path, "config.txt"), String))
+    @test occursin("index,total,a_idx,t_idx,A,T_ms", first(readlines(joinpath(out_path, "summary.csv"))))
 end
 
 @testset "live applet config" begin

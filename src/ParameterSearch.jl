@@ -380,25 +380,30 @@ function _apply_search_result!(montages, config::ParameterSearchConfig, result)
     return montages
 end
 
-function _append_search_summary(summary_path::AbstractString, result)
+function _append_search_summary(summary_path::AbstractString, config::ParameterSearchConfig, result)
     open(summary_path, "a") do io
-        println(io, _summary_line(result))
+        println(io, _summary_line(config, result))
     end
 end
 
 function _summary_header()
-    return "index,total,A,T_ms,seed,compute_seconds,elapsed_seconds"
+    return "index,total,a_idx,t_idx,A,T_ms,seed,compute_seconds,elapsed_seconds,tile_top,tile_left"
 end
 
-function _summary_line(result)
+function _summary_line(config::ParameterSearchConfig, result)
+    tile_top, tile_left = _cell_origin(config, result.a_idx, result.t_idx)
     return join((
         result.index,
         result.total,
+        result.a_idx,
+        result.t_idx,
         result.amplitude,
         result.period,
         result.seed === nothing ? "" : result.seed,
         result.compute_seconds,
         result.elapsed_seconds,
+        tile_top,
+        tile_left,
     ), ",")
 end
 
@@ -407,11 +412,11 @@ function _record_search_result!(results::Vector, result)
     return results
 end
 
-function _write_search_summary(summary_path::AbstractString, results::Vector)
+function _write_search_summary(summary_path::AbstractString, config::ParameterSearchConfig, results::Vector)
     open(summary_path, "w") do io
         println(io, _summary_header())
         for result in results
-            println(io, _summary_line(result))
+            println(io, _summary_line(config, result))
         end
     end
     return summary_path
@@ -431,6 +436,8 @@ function _write_search_metadata(out_path::AbstractString, config::ParameterSearc
         println(io, "A_values=", _format_vector(config.A_values))
         println(io, "T_ms_values=", _format_vector(config.period_values))
         println(io, "times_ms=", join(config.times_ms, ","))
+        println(io, "simulation_start_time_ms=0")
+        println(io, "simulation_end_time_ms=", maximum(config.times_ms))
         println(io, "start_time_ms=", minimum(config.times_ms))
         println(io, "end_time_ms=", maximum(config.times_ms))
         println(io, "interval_ms=", interval_ms)
@@ -444,7 +451,56 @@ function _write_search_metadata(out_path::AbstractString, config::ParameterSearc
         println(io, "workers=", config.workers)
         println(io, "total_simulations=", total)
         println(io, "summary=summary.csv")
+        println(io, "grid_map=grid_map.csv")
+        println(io, "snapshot_manifest=snapshot_manifest.csv")
         println(io, "file_pattern=parameter_search_", config.view, "_{time_ms}ms.png")
+    end
+    return path
+end
+
+function _write_grid_map(out_path::AbstractString, config::ParameterSearchConfig, jobs)
+    path = joinpath(out_path, "grid_map.csv")
+    open(path, "w") do io
+        println(io, "index,total,a_idx,t_idx,A,T_ms,tile_top,tile_left")
+        for job in jobs
+            tile_top, tile_left = _cell_origin(config, job.a_idx, job.t_idx)
+            println(io, join((
+                job.index,
+                job.total,
+                job.a_idx,
+                job.t_idx,
+                job.amplitude,
+                job.period,
+                tile_top,
+                tile_left,
+            ), ","))
+        end
+    end
+    return path
+end
+
+function _write_snapshot_manifest(out_path::AbstractString, config::ParameterSearchConfig, jobs)
+    path = joinpath(out_path, "snapshot_manifest.csv")
+    open(path, "w") do io
+        println(io, "file,time_ms,index,total,a_idx,t_idx,A,T_ms,tile_top,tile_left")
+        for time_ms in config.times_ms
+            filename = string("parameter_search_", config.view, "_", lpad(string(time_ms), 5, "0"), "ms.png")
+            for job in jobs
+                tile_top, tile_left = _cell_origin(config, job.a_idx, job.t_idx)
+                println(io, join((
+                    filename,
+                    time_ms,
+                    job.index,
+                    job.total,
+                    job.a_idx,
+                    job.t_idx,
+                    job.amplitude,
+                    job.period,
+                    tile_top,
+                    tile_left,
+                ), ","))
+            end
+        end
     end
     return path
 end
@@ -455,6 +511,7 @@ function _print_search_progress(config::ParameterSearchConfig, result, completed
     worker_text = result.worker == 1 ? "" : string(" worker=", result.worker)
     println(
         "[", completed, "/", total, "] ",
+        "idx=", result.index, " ",
         "A=", _compact_number(result.amplitude),
         " T=", _compact_number(result.period), " ms ",
         "seed=", result.seed === nothing ? "random" : result.seed,
@@ -473,7 +530,7 @@ function _run_parameter_search_serial!(montages, results::Vector, progress_summa
         result = _run_parameter_search_job(job, config, interval_ms, max_time_ms)
         _apply_search_result!(montages, config, result)
         _record_search_result!(results, result)
-        _append_search_summary(progress_summary_path, result)
+        _append_search_summary(progress_summary_path, config, result)
         _print_search_progress(config, result, completed, total, search_start)
     end
 
@@ -539,7 +596,7 @@ function _run_parameter_search_parallel!(montages, results::Vector, progress_sum
             completed += 1
             _apply_search_result!(montages, config, result)
             _record_search_result!(results, result)
-            _append_search_summary(progress_summary_path, result)
+            _append_search_summary(progress_summary_path, config, result)
             _print_search_progress(config, result, completed, length(jobs), search_start)
         end
 
@@ -573,6 +630,8 @@ function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfi
         " view=", config.view,
         " duty=", _duty_text(config),
         " workers=", config.workers,
+        " run_end=", max_time_ms,
+        " ms",
         " snapshots=", join(string.(config.times_ms), ","),
         " ms",
     )
@@ -586,6 +645,7 @@ function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfi
         FFTW.set_num_threads(config.fftw_threads)
     end
 
+    jobs = _search_jobs(config)
     montages = Dict(time_ms => _make_montage_canvas(config, time_ms) for time_ms in config.times_ms)
     summary_path = joinpath(out_path, "summary.csv")
     progress_summary_path = joinpath(out_path, "summary_progress.csv")
@@ -593,9 +653,10 @@ function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfi
         println(io, _summary_header())
     end
     _write_search_metadata(out_path, config, total, interval_ms)
+    _write_grid_map(out_path, config, jobs)
+    _write_snapshot_manifest(out_path, config, jobs)
 
     search_start = time_ns()
-    jobs = _search_jobs(config)
     results = Vector{Any}(undef, length(jobs))
 
     if config.backend == :cpu && config.workers > 1
@@ -604,7 +665,7 @@ function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfi
         _run_parameter_search_serial!(montages, results, progress_summary_path, config, jobs, interval_ms, max_time_ms, search_start)
     end
 
-    _write_search_summary(summary_path, results)
+    _write_search_summary(summary_path, config, results)
     rm(progress_summary_path; force=true)
 
     for time_ms in config.times_ms
