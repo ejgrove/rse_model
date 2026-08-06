@@ -209,6 +209,50 @@ end
 end
 
 @testset "parameter search smoke" begin
+    metal_auto = RSEModel._validate_search_config(ParameterSearchConfig(backend=:metal, convolution=:auto))
+    @test metal_auto.convolution == :separable
+    @test metal_auto.kernel_cutoff == 4.0
+
+    equivalence_config = RSEModel._validate_search_config(ParameterSearchConfig(
+        N=9,
+        A_values=[0.2],
+        period_values=[10.0],
+        times_ms=[2, 4],
+        backend=:cpu,
+        convolution=:fft,
+        seed=3,
+        view=:cortical,
+    ))
+    equivalence_job = first(RSEModel._search_jobs(equivalence_config))
+    equivalence_result = RSEModel._run_parameter_search_job(
+        equivalence_job,
+        equivalence_config,
+        RSEModel._sample_interval_ms(equivalence_config.times_ms),
+        maximum(equivalence_config.times_ms),
+    )
+    reference = run_simulation(
+        N=equivalence_config.N,
+        A=equivalence_job.amplitude,
+        T=equivalence_job.period,
+        Se=equivalence_config.Se,
+        Si=equivalence_config.Si,
+        start_time=minimum(equivalence_config.times_ms),
+        end_time=maximum(equivalence_config.times_ms),
+        seed=equivalence_job.seed,
+        plot=false,
+        gif=false,
+        interval=RSEModel._sample_interval_ms(equivalence_config.times_ms),
+        p=ModelParams(),
+        backend=:cpu,
+        convolution=:fft,
+        duty_cycle_percent=equivalence_config.duty_cycle_percent,
+    )
+    reference_images = Dict(
+        round(Int, snapshot.t) => RSEModel._search_cell_rgb(snapshot, equivalence_config.view, equivalence_config.cmap)
+        for snapshot in reference.images
+    )
+    @test equivalence_result.images == reference_images
+
     out_path = mktempdir()
     result_path = run_parameter_search(ParameterSearchConfig(
         N=9,
@@ -232,6 +276,7 @@ end
     @test !isfile(joinpath(out_path, "summary_progress.csv"))
     @test isfile(joinpath(out_path, "parameter_search_cortical_00010ms.png"))
     @test occursin("simulation_end_time_ms=10", read(joinpath(out_path, "config.txt"), String))
+    @test occursin("kernel_cutoff=4.0", read(joinpath(out_path, "config.txt"), String))
     @test occursin("stimulus_threshold=0", read(joinpath(out_path, "config.txt"), String))
     @test occursin("index,total,a_idx,t_idx,A,T_ms", first(readlines(joinpath(out_path, "summary.csv"))))
 end

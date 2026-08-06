@@ -10,7 +10,7 @@ Base.@kwdef struct ParameterSearchConfig
     Si::Float64 = 5.0
     backend::Symbol = :metal
     convolution::Symbol = :auto
-    kernel_cutoff::Float64 = 3.0
+    kernel_cutoff::Float64 = 4.0
     duty_cycle_percent::Union{Nothing,Float64} = 50.0
     seed::Int = 42
     seed_mode::Symbol = :same
@@ -132,11 +132,7 @@ function _validate_search_config(config::ParameterSearchConfig)
     config.view in (:retinal, :cortical) || throw(ArgumentError("view must be :retinal or :cortical."))
     config.seed_mode in (:same, :increment) || throw(ArgumentError("seed_mode must be :same or :increment."))
 
-    convolution = if config.convolution == :auto
-        _default_convolution(config.backend)
-    else
-        config.convolution
-    end
+    convolution = config.convolution == :auto ? (config.backend == :metal ? :separable : :fft) : config.convolution
     convolution in (:fft, :separable) || throw(ArgumentError("convolution must be :auto, :fft, or :separable."))
     config.backend == :metal || convolution == :fft ||
         throw(ArgumentError("CPU parameter searches currently support FFT convolution only."))
@@ -191,9 +187,13 @@ function _seed_for_sim(config::ParameterSearchConfig, index::Integer)
     return config.seed
 end
 
-function _search_cell_rgb(snapshot::Snapshot, view::Symbol, cmap::AbstractString)
-    img = view == :retinal ? retinal_transform(snapshot.cortical_activity) : snapshot.cortical_activity
+function _search_activity_rgb(activity::AbstractMatrix, view::Symbol, cmap::AbstractString)
+    img = view == :retinal ? retinal_transform(activity) : activity
     return _heatmap_rgb(img; cmap=cmap)
+end
+
+function _search_cell_rgb(snapshot::Snapshot, view::Symbol, cmap::AbstractString)
+    return _search_activity_rgb(snapshot.cortical_activity, view, cmap)
 end
 
 function _text_width(text, scale)
@@ -313,44 +313,179 @@ function _search_jobs(config::ParameterSearchConfig)
     return jobs
 end
 
-function _run_parameter_search_job(job, config::ParameterSearchConfig, interval_ms::Integer, max_time_ms::Integer)
-    if config.backend == :cpu
-        FFTW.set_num_threads(config.fftw_threads)
+mutable struct CPUSearchWorkspace{F,CE,CI}
+    p::ModelParams{F}
+    Ue::Matrix{F}
+    Ui::Matrix{F}
+    Uec::Matrix{F}
+    Uic::Matrix{F}
+    excitatory_convolver::CE
+    inhibitory_convolver::CI
+    noise::Array{F,3}
+    activity::Matrix{F}
+end
+
+mutable struct MetalSearchWorkspace{CE,CI,U}
+    p::ModelParams{Float32}
+    Ue::U
+    Ui::U
+    Uec::U
+    Uic::U
+    excitatory_convolver::CE
+    inhibitory_convolver::CI
+    noise_E::U
+    noise_I::U
+    cortical_gpu::U
+end
+
+const _CPU_SEARCH_WORKSPACES = Dict{Any,Any}()
+const _METAL_SEARCH_WORKSPACES = Dict{Any,Any}()
+
+function _cpu_search_workspace_key(config::ParameterSearchConfig)
+    return (
+        config.N,
+        Float32(config.Se),
+        Float32(config.Si),
+        config.fft_flags,
+        config.fftw_threads,
+    )
+end
+
+function _metal_search_workspace_key(config::ParameterSearchConfig)
+    return (
+        config.N,
+        Float32(config.Se),
+        Float32(config.Si),
+        config.convolution,
+        Float32(config.kernel_cutoff),
+    )
+end
+
+function _make_cpu_search_workspace(config::ParameterSearchConfig)
+    FFTW.set_num_threads(config.fftw_threads)
+    F = Float32
+    p = ModelParams{F}()
+    Ue = Matrix{F}(undef, config.N, config.N)
+    Ui = Matrix{F}(undef, config.N, config.N)
+    Ke = generate_gaussian_kernel(config.Se, config.N; dtype=F)
+    Ki = generate_gaussian_kernel(config.Si, config.N; dtype=F)
+
+    return CPUSearchWorkspace(
+        p,
+        Ue,
+        Ui,
+        similar(Ue),
+        similar(Ui),
+        FFTConvolver(Ke, Ue; flags=config.fft_flags),
+        FFTConvolver(Ki, Ui; flags=config.fft_flags),
+        Array{F}(undef, 2, config.N, config.N),
+        similar(Ue),
+    )
+end
+
+function _make_metal_search_workspace(config::ParameterSearchConfig)
+    Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
+    p = ModelParams{Float32}()
+    Ue = Metal.zeros(Float32, config.N, config.N)
+    Ui = Metal.zeros(Float32, config.N, config.N)
+    excitatory_convolver = if config.convolution == :fft
+        Ke = generate_gaussian_kernel(config.Se, config.N; dtype=Float32)
+        MetalFFTConvolver(Ke, Ue)
+    elseif config.convolution == :separable
+        MetalSeparableConvolver(config.Se, Ue; cutoff=config.kernel_cutoff)
+    else
+        throw(ArgumentError("Metal convolution must be :fft or :separable"))
+    end
+    inhibitory_convolver = if config.convolution == :fft
+        Ki = generate_gaussian_kernel(config.Si, config.N; dtype=Float32)
+        MetalFFTConvolver(Ki, Ui)
+    else
+        MetalSeparableConvolver(config.Si, Ui; cutoff=config.kernel_cutoff)
     end
 
-    sim_start = time_ns()
-    data = run_simulation(
-        N=config.N,
-        A=job.amplitude,
-        T=job.period,
-        Se=config.Se,
-        Si=config.Si,
-        start_time=minimum(config.times_ms),
-        end_time=max_time_ms,
-        seed=job.seed,
-        plot=false,
-        gif=false,
-        interval=interval_ms,
-        p=ModelParams(),
-        fps=50,
-        fft_flags=config.fft_flags,
-        backend=config.backend,
-        gpu_threads=config.gpu_threads,
-        convolution=config.convolution,
-        kernel_cutoff=config.kernel_cutoff,
-        boundary=:periodic,
-        duty_cycle_percent=config.duty_cycle_percent,
+    return MetalSearchWorkspace(
+        p,
+        Ue,
+        Ui,
+        similar(Ue),
+        similar(Ui),
+        excitatory_convolver,
+        inhibitory_convolver,
+        similar(Ue),
+        similar(Ui),
+        similar(Ue),
     )
-    elapsed = (time_ns() - sim_start) / 1e9
-    snapshots = Dict(round(Int, snapshot.t) => snapshot for snapshot in data.images)
+end
+
+function _cpu_search_workspace(config::ParameterSearchConfig)
+    key = _cpu_search_workspace_key(config)
+    return get!(_CPU_SEARCH_WORKSPACES, key) do
+        _make_cpu_search_workspace(config)
+    end
+end
+
+function _metal_search_workspace(config::ParameterSearchConfig)
+    key = _metal_search_workspace_key(config)
+    return get!(_METAL_SEARCH_WORKSPACES, key) do
+        _make_metal_search_workspace(config)
+    end
+end
+
+function _sample_schedule(config::ParameterSearchConfig, p::ModelParams)
+    pairs = [(round(Int, time_ms / Float64(p.dt)), time_ms) for time_ms in config.times_ms]
+    sort!(pairs; by=first)
+    return pairs
+end
+
+function _search_activity_rgb!(workspace::CPUSearchWorkspace, config::ParameterSearchConfig)
+    @. workspace.activity = abs(workspace.Ue - workspace.Ui)
+    return _search_activity_rgb(workspace.activity, config.view, config.cmap)
+end
+
+function _search_activity_rgb!(workspace::MetalSearchWorkspace, config::ParameterSearchConfig)
+    workspace.cortical_gpu .= abs.(workspace.Ue .- workspace.Ui)
+    Metal.synchronize()
+    return _search_activity_rgb(Array(workspace.cortical_gpu), config.view, config.cmap)
+end
+
+function _run_parameter_search_job_cpu(job, config::ParameterSearchConfig, max_time_ms::Integer)
+    sim_start = time_ns()
+    workspace = _cpu_search_workspace(config)
+    rng = _rng(job.seed)
+    rand!(rng, workspace.Ue)
+    rand!(rng, workspace.Ui)
+
+    p = workspace.p
+    sample_schedule = _sample_schedule(config, p)
+    max_step = round(Int, max_time_ms / Float64(p.dt))
+    sample_idx = 1
     images = Dict{Int,Array{UInt8,3}}()
 
-    for time_ms in config.times_ms
-        snapshot = get(snapshots, time_ms, nothing)
-        snapshot === nothing && continue
-        images[time_ms] = _search_cell_rgb(snapshot, config.view, config.cmap)
+    for step_idx in 0:max_step
+        t = Float32(step_idx) * p.dt
+        randn!(rng, workspace.noise)
+        _step!(
+            workspace.Ue,
+            workspace.Ui,
+            workspace.Uec,
+            workspace.Uic,
+            workspace.excitatory_convolver,
+            workspace.inhibitory_convolver,
+            workspace.noise,
+            Float32(job.amplitude),
+            Float32(job.period),
+            t,
+            p,
+            config.duty_cycle_percent,
+        )
+
+        if sample_idx <= length(sample_schedule) && step_idx == sample_schedule[sample_idx][1]
+            images[sample_schedule[sample_idx][2]] = _search_activity_rgb!(workspace, config)
+            sample_idx += 1
+        end
     end
 
+    elapsed = (time_ns() - sim_start) / 1e9
     return (
         index=job.index,
         total=job.total,
@@ -359,11 +494,95 @@ function _run_parameter_search_job(job, config::ParameterSearchConfig, interval_
         amplitude=job.amplitude,
         period=job.period,
         seed=job.seed,
-        compute_seconds=data.compute_seconds,
+        compute_seconds=elapsed,
         elapsed_seconds=elapsed,
         images=images,
         worker=myid(),
     )
+end
+
+function _run_parameter_search_job_metal(job, config::ParameterSearchConfig, max_time_ms::Integer)
+    sim_start = time_ns()
+    workspace = _metal_search_workspace(config)
+    job.seed === nothing || Metal.seed!(job.seed)
+    Metal.rand!(workspace.Ue)
+    Metal.rand!(workspace.Ui)
+
+    p = workspace.p
+    sample_schedule = _sample_schedule(config, p)
+    max_step = round(Int, max_time_ms / Float64(p.dt))
+    sample_idx = 1
+    images = Dict{Int,Array{UInt8,3}}()
+
+    for step_idx in 0:max_step
+        t = Float32(step_idx) * p.dt
+        Metal.randn!(workspace.noise_E)
+        Metal.randn!(workspace.noise_I)
+        if config.convolution == :fft
+            _metal_step!(
+                workspace.Ue,
+                workspace.Ui,
+                workspace.Uec,
+                workspace.Uic,
+                workspace.excitatory_convolver,
+                workspace.inhibitory_convolver,
+                workspace.noise_E,
+                workspace.noise_I,
+                Float32(job.amplitude),
+                Float32(job.period),
+                t,
+                p,
+                config.gpu_threads,
+                config.duty_cycle_percent,
+            )
+        else
+            _metal_step_separable!(
+                workspace.Ue,
+                workspace.Ui,
+                workspace.Uec,
+                workspace.Uic,
+                workspace.excitatory_convolver,
+                workspace.inhibitory_convolver,
+                workspace.noise_E,
+                workspace.noise_I,
+                Float32(job.amplitude),
+                Float32(job.period),
+                t,
+                p,
+                config.gpu_threads,
+                :periodic,
+                :periodic,
+                config.duty_cycle_percent,
+            )
+        end
+
+        if sample_idx <= length(sample_schedule) && step_idx == sample_schedule[sample_idx][1]
+            images[sample_schedule[sample_idx][2]] = _search_activity_rgb!(workspace, config)
+            sample_idx += 1
+        end
+    end
+
+    Metal.synchronize()
+    elapsed = (time_ns() - sim_start) / 1e9
+    return (
+        index=job.index,
+        total=job.total,
+        a_idx=job.a_idx,
+        t_idx=job.t_idx,
+        amplitude=job.amplitude,
+        period=job.period,
+        seed=job.seed,
+        compute_seconds=elapsed,
+        elapsed_seconds=elapsed,
+        images=images,
+        worker=myid(),
+    )
+end
+
+function _run_parameter_search_job(job, config::ParameterSearchConfig, interval_ms::Integer, max_time_ms::Integer)
+    return config.backend == :cpu ?
+        _run_parameter_search_job_cpu(job, config, max_time_ms) :
+        _run_parameter_search_job_metal(job, config, max_time_ms)
 end
 
 function _apply_search_result!(montages, config::ParameterSearchConfig, result)
@@ -444,6 +663,7 @@ function _write_search_metadata(out_path::AbstractString, config::ParameterSearc
         println(io, "view=", config.view)
         println(io, "backend=", config.backend)
         println(io, "convolution=", config.convolution)
+        println(io, "kernel_cutoff=", config.kernel_cutoff)
         println(io, "boundary=periodic")
         println(io, "duty_cycle_percent=", config.duty_cycle_percent === nothing ? "model" : _compact_number(config.duty_cycle_percent))
         println(io, "stimulus_formula=A*H(sin(2*pi*t/T)-stimulus_threshold)")
@@ -628,6 +848,7 @@ function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfi
         " Si=", config.Si,
         " backend=", config.backend,
         " conv=", config.convolution,
+        " kernel_cutoff=", _compact_number(config.kernel_cutoff),
         " boundary=periodic",
         " view=", config.view,
         " duty=", _duty_text(config),
@@ -724,13 +945,13 @@ function _search_parser()
             help = "Shortcut for --backend metal."
             action = :store_true
         "--conv"
-            help = "Convolution backend: auto, fft, or separable. Auto uses FFT for periodic CPU/Metal runs."
+            help = "Convolution backend: auto, fft, or separable. Parameter-search auto uses separable on Metal and FFT on CPU."
             arg_type = String
             default = "auto"
         "--kernel-cutoff"
             help = "Gaussian cutoff in sigma units for Metal separable convolution."
             arg_type = Float64
-            default = 3.0
+            default = 4.0
             dest_name = "kernel_cutoff"
         "--duty-cycle"
             help = "Stimulus duty cycle percentage. A value of 50 uses threshold 0. Defaults to 50."

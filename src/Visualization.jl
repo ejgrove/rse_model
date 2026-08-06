@@ -96,8 +96,7 @@ function _palette_stops(cmap::AbstractString)
     end
 end
 
-function _palette_rgb(value, cmap::AbstractString)
-    stops = _palette_stops(cmap)
+function _palette_rgb(value, stops)
     t = clamp(Float64(value), 0.0, 1.0)
     scaled = t * (length(stops) - 1)
     idx = min(floor(Int, scaled) + 1, length(stops) - 1)
@@ -111,6 +110,10 @@ function _palette_rgb(value, cmap::AbstractString)
     )
 end
 
+function _palette_rgb(value, cmap::AbstractString)
+    return _palette_rgb(value, _palette_stops(cmap))
+end
+
 function _normalized_values(img)
     lo = minimum(img)
     hi = maximum(img)
@@ -121,11 +124,15 @@ function _normalized_values(img)
 end
 
 function _heatmap_rgb(img; cmap::AbstractString="plasma")
-    values = _normalized_values(img)
-    rows, cols = size(values)
+    rows, cols = size(img)
+    lo = minimum(img)
+    hi = maximum(img)
+    scale = hi == lo ? 0.0 : inv(Float64(hi - lo))
+    stops = _palette_stops(cmap)
     rgb = Array{UInt8}(undef, rows, cols, 3)
-    for col in 1:cols, row in 1:rows
-        r, g, b = _palette_rgb(values[row, col], cmap)
+    @inbounds for col in 1:cols, row in 1:rows
+        value = hi == lo ? 0.0 : (Float64(img[row, col] - lo) * scale)
+        r, g, b = _palette_rgb(value, stops)
         rgb[row, col, 1] = r
         rgb[row, col, 2] = g
         rgb[row, col, 3] = b
