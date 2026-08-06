@@ -2,7 +2,7 @@ using Base64
 using HTTP
 
 Base.@kwdef struct LiveConfig
-    N::Int = 105
+    N::Int = 81
     fast_n::Bool = true
     backend::Symbol = :metal
     convolution::Symbol = :auto
@@ -150,7 +150,7 @@ function live_config_from_query(params::AbstractDict{String,String})
     seed = isempty(seed_value) ? nothing : parse(Int, seed_value)
 
     return normalize_live_config(LiveConfig(
-        N=_parse_int(params, "N", 105),
+        N=_parse_int(params, "N", 81),
         fast_n=_parse_bool(_get(params, "fast_n", "true"), true),
         backend=_parse_symbol(params, "backend", :metal),
         convolution=_parse_symbol(params, "conv", :auto),
@@ -1155,7 +1155,7 @@ const APPLET_HTML = raw"""
       <h1>Real-time field viewer</h1>
       <p class="subtitle">Streams the Julia simulation into the browser. GPU mode keeps the model on Metal and sends only display frames.</p>
       <div class="control-grid">
-        <label>N<input id="n" type="number" min="5" step="2" value="101"></label>
+        <label>N<input id="n" type="number" min="5" step="2" value="81"></label>
         <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
         <label>Backend<select id="backend"><option value="metal">metal</option><option value="cpu">cpu</option></select></label>
         <label>Convolution<select id="conv"><option value="auto">auto</option><option value="separable">separable</option><option value="fft">fft</option></select></label>
