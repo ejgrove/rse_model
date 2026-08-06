@@ -11,6 +11,7 @@ Base.@kwdef struct LiveConfig
     duty_cycle_percent::Union{Nothing,Float32} = Float32(duty_cycle_percent_from_threshold(ModelParams{Float32}().V))
     Se::Float32 = 2.0f0
     Si::Float32 = 5.0f0
+    dt::Float32 = 0.2f0
     seed::Union{Nothing,Int} = nothing
     target_fps::Int = 30
     speed::Float64 = 1.0
@@ -63,6 +64,7 @@ function normalize_live_config(config::LiveConfig)
     target_fps = max(1, config.target_fps)
     N = config.fast_n ? next_fast_odd_size(config.N) : odd_positive_int(config.N)
     config.speed >= 0 || throw(ArgumentError("speed must be non-negative."))
+    config.dt > 0 || throw(ArgumentError("dt must be positive."))
     config.gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
     config.kernel_cutoff > 0 || throw(ArgumentError("kernel_cutoff must be positive."))
     config.max_frames >= 0 || throw(ArgumentError("max_frames must be non-negative."))
@@ -84,6 +86,7 @@ function normalize_live_config(config::LiveConfig)
         duty_cycle_percent=config.duty_cycle_percent,
         Se=config.Se,
         Si=config.Si,
+        dt=config.dt,
         seed=config.seed,
         target_fps=target_fps,
         speed=config.speed,
@@ -159,6 +162,7 @@ function live_config_from_query(params::AbstractDict{String,String})
         duty_cycle_percent=_parse_optional_float32(params, "duty_cycle"),
         Se=_parse_float32(params, "Se", 2.0f0),
         Si=_parse_float32(params, "Si", 5.0f0),
+        dt=_parse_float32(params, "dt", 0.2f0),
         seed=seed,
         target_fps=_parse_int(params, "fps", 30),
         speed=_parse_float(params, "speed", 1.0),
@@ -172,6 +176,10 @@ function live_config_from_query(params::AbstractDict{String,String})
         overlap_rows=_parse_int(params, "overlap_rows", 6),
         max_frames=_parse_int(params, "max_frames", 0),
     ))
+end
+
+function _live_model_params(config::LiveConfig)
+    return ModelParams{Float32}(dt=config.dt)
 end
 
 function _steps_per_frame(config::LiveConfig, p::ModelParams)
@@ -257,7 +265,7 @@ end
 
 function _stream_cpu_frames(callback::Function, config::LiveConfig)
     config.coupling == :midline && return _stream_cpu_coupled_frames(callback, config)
-    p = ModelParams{Float32}()
+    p = _live_model_params(config)
     rng = _rng(config.seed)
     Ue = rand(rng, Float32, config.N, config.N)
     Ui = rand(rng, Float32, config.N, config.N)
@@ -309,7 +317,7 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig)
 end
 
 function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
-    p = ModelParams{Float32}()
+    p = _live_model_params(config)
     rng = _rng(config.seed)
     N = config.N
     Ue_left = rand(rng, Float32, N, N)
@@ -410,7 +418,7 @@ end
 function _stream_metal_frames(callback::Function, config::LiveConfig)
     config.coupling == :midline && return _stream_metal_coupled_frames(callback, config)
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
-    p = ModelParams{Float32}()
+    p = _live_model_params(config)
     config.seed === nothing || Metal.seed!(config.seed)
 
     Ue = Metal.rand(Float32, config.N, config.N)
@@ -503,7 +511,7 @@ end
 
 function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
-    p = ModelParams{Float32}()
+    p = _live_model_params(config)
     config.seed === nothing || Metal.seed!(config.seed)
     N = config.N
 
@@ -707,6 +715,7 @@ function _hello_json(config::LiveConfig)
         ",\"dutyCycle\":", _json_number(config.duty_cycle_percent),
         ",\"Se\":", _json_number(config.Se),
         ",\"Si\":", _json_number(config.Si),
+        ",\"dt\":", _json_number(config.dt),
         ",\"kernelCutoff\":", _json_number(config.kernel_cutoff),
         ",\"boundaryX\":", _json_string(config.boundary_x),
         ",\"boundaryY\":", _json_string(config.boundary_y),
@@ -1163,14 +1172,15 @@ const APPLET_HTML = raw"""
         <label>Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
         <label>Coupling<select id="coupling"><option value="none">none</option><option value="midline">midline</option></select></label>
         <label>Speed<select id="speed"><option value="1">1x real time</option><option value="0.5">0.5x</option><option value="2">2x</option><option value="0">max</option></select></label>
-        <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
         <label>A<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
         <label>T (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
         <label>Duty (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
+        <label>Se<input id="se" type="number" min="0.1" step="0.05" value="2"></label>
+        <label>Si<input id="si" type="number" min="0.1" step="0.05" value="5"></label>
+        <label>dt (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
+        <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
         <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
         <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
-        <label>Se<input id="se" type="number" min="0.1" step="0.1" value="2"></label>
-        <label>Si<input id="si" type="number" min="0.1" step="0.1" value="5"></label>
       </div>
       <label class="check-row"><input id="fastN" type="checkbox" checked> Snap to FFT-friendly odd N</label>
       <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
@@ -1191,6 +1201,7 @@ const APPLET_HTML = raw"""
         <div class="metric"><span>Sim time</span><strong id="simTime">0 ms</strong></div>
         <div class="metric"><span>Stream FPS</span><strong id="streamFps">0</strong></div>
         <div class="metric"><span>ms / step</span><strong id="msStep">0</strong></div>
+        <div class="metric"><span>dt</span><strong id="dtMetric">0.2 ms</strong></div>
         <div class="metric"><span>Real-time x</span><strong id="rtx">0</strong></div>
         <div class="metric"><span>Grid</span><strong id="gridN">-</strong></div>
       </div>
@@ -1231,6 +1242,7 @@ const APPLET_HTML = raw"""
       overlapRows: document.getElementById("overlapRows"),
       se: document.getElementById("se"),
       si: document.getElementById("si"),
+      dt: document.getElementById("dt"),
       fastN: document.getElementById("fastN"),
       seed: document.getElementById("seed"),
       pausePlay: document.getElementById("pausePlay"),
@@ -1239,6 +1251,7 @@ const APPLET_HTML = raw"""
       simTime: document.getElementById("simTime"),
       streamFps: document.getElementById("streamFps"),
       msStep: document.getElementById("msStep"),
+      dtMetric: document.getElementById("dtMetric"),
       rtx: document.getElementById("rtx"),
       gridN: document.getElementById("gridN"),
       range: document.getElementById("range"),
@@ -1302,6 +1315,7 @@ const APPLET_HTML = raw"""
       els.simTime.textContent = "0 ms";
       els.streamFps.textContent = "0";
       els.msStep.textContent = "0";
+      els.dtMetric.textContent = `${Number(els.dt.value).toFixed(3)} ms`;
       els.rtx.textContent = "0";
       els.gridN.textContent = "-";
       els.range.textContent = "range -";
@@ -1465,6 +1479,7 @@ const APPLET_HTML = raw"""
       params.set("overlap_rows", els.overlapRows.value);
       params.set("Se", els.se.value);
       params.set("Si", els.si.value);
+      params.set("dt", els.dt.value);
       params.set("fast_n", els.fastN.checked ? "true" : "false");
       if (els.seed.value.trim()) params.set("seed", els.seed.value.trim());
       return params;
@@ -1492,7 +1507,8 @@ const APPLET_HTML = raw"""
           els.gridN.textContent = String(msg.N);
           const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
           const coupling = msg.coupling === "midline" ? `, midline g=${msg.couplingStrength}` : "";
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY} at target ${msg.fps} fps, ${duty}${coupling}.`;
+          els.dtMetric.textContent = `${Number(msg.dt).toFixed(3)} ms`;
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {

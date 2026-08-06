@@ -298,6 +298,9 @@ end
         "speed" => "0",
         "seed" => "42",
         "duty_cycle" => "25",
+        "Se" => "1.75",
+        "Si" => "4.5",
+        "dt" => "0.1",
         "boundary_x" => "edge",
         "boundary_y" => "zero",
         "coupling" => "midline",
@@ -311,6 +314,9 @@ end
     @test config.speed == 0
     @test config.seed == 42
     @test config.duty_cycle_percent == 25.0f0
+    @test config.Se == 1.75f0
+    @test config.Si == 4.5f0
+    @test config.dt == 0.1f0
     @test config.boundary_x == :edge
     @test config.boundary_y == :zero
     @test config.coupling == :midline
@@ -331,16 +337,21 @@ end
     try
         url = applet_url(server, "127.0.0.1")
         response = HTTP.get(url; status_exception=false)
+        body = String(response.body)
         @test response.status == 200
-        @test occursin("RSE Real-Time Viewer", String(response.body))
+        @test occursin("RSE Real-Time Viewer", body)
+        @test occursin("id=\"dt\"", body)
 
         address = "127.0.0.1:$(HTTP.port(server))"
-        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=midline&overlap_rows=6") do ws
+        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=midline&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1") do ws
             hello = String(HTTP.WebSockets.receive(ws))
             frame = String(HTTP.WebSockets.receive(ws))
             @test occursin("\"type\":\"hello\"", hello)
             @test occursin("\"type\":\"frame\"", frame)
             @test occursin("\"coupling\":\"midline\"", hello)
+            @test occursin("\"Se\":1.5", hello)
+            @test occursin("\"Si\":4.5", hello)
+            @test occursin("\"dt\":0.1", hello)
             @test occursin("\"cols\":50", frame)
         end
     finally
