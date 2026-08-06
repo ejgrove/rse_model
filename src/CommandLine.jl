@@ -72,6 +72,12 @@ function _validate_convolution(value, backend)
     end
 end
 
+function _validate_boundary_cli(value)
+    key = lowercase(value)
+    key in ("periodic", "edge", "zero") && return Symbol(key)
+    throw(ArgumentError("--boundary must be periodic, edge, or zero"))
+end
+
 function _fft_plan_flags(value)
     key = lowercase(value)
     if key == "estimate"
@@ -113,6 +119,10 @@ function _build_parser()
             arg_type = Float64
             default = 3.0
             dest_name = "kernel_cutoff"
+        "--boundary"
+            help = "Convolution boundary mode: periodic, edge, or zero. Non-periodic modes require Metal separable convolution."
+            arg_type = String
+            default = "periodic"
         "--duty-cycle"
             help = "Stimulus duty cycle percentage. Defaults to the ModelParams threshold V."
             arg_type = Float64
@@ -275,6 +285,7 @@ function main(argv=ARGS)
     args["images"] = _validate_images(args["images"])
     args["backend"] = args["gpu"] ? "metal" : _validate_backend(args["backend"])
     convolution = _validate_convolution(args["conv"], args["backend"])
+    boundary = _validate_boundary_cli(args["boundary"])
 
     if args["interval"] <= 0
         throw(ArgumentError("--interval must be positive"))
@@ -343,6 +354,7 @@ function main(argv=ARGS)
             gpu_threads=args["gpu_threads"],
             convolution=convolution,
             kernel_cutoff=args["kernel_cutoff"],
+            boundary=boundary,
             duty_cycle_percent=args["duty_cycle_percent"],
         )
         println(

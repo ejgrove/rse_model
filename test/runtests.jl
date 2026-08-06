@@ -38,6 +38,21 @@ end
     @test RSEModel.strobe_stimulus(30.0f0, 0.7f0, 115.0f0, ModelParams{Float32}(), 50.0f0) == 0.7f0
 end
 
+@testset "midline coupling" begin
+    left_e = fill(1.0f0, 8, 4)
+    left_i = fill(2.0f0, 8, 4)
+    right_e = fill(3.0f0, 8, 4)
+    right_i = fill(4.0f0, 8, 4)
+    RSEModel._apply_midline_coupling!(left_e, left_i, right_e, right_i, 0.25f0, 4)
+
+    @test left_e[1, 1] == 1.5f0
+    @test right_e[2, 1] == 2.5f0
+    @test left_i[8, 1] == 2.5f0
+    @test right_i[7, 1] == 3.5f0
+    @test left_e[4, 1] == 1.0f0
+    @test right_i[4, 1] == 4.0f0
+end
+
 @testset "short simulation" begin
     data = run_simulation(
         N=25,
@@ -103,13 +118,24 @@ end
         ce_pair = RSEModel.MetalSeparableConvolver(2.0, Ue; cutoff=3.0)
         ci_pair = RSEModel.MetalSeparableConvolver(5.0, Ui; cutoff=3.0)
 
-        RSEModel.separable_convolution!(out_e_separate, ce_separate, Ue; gpu_threads=128)
-        RSEModel.separable_convolution!(out_i_separate, ci_separate, Ui; gpu_threads=128)
-        RSEModel.separable_convolution_pair!(out_e_pair, out_i_pair, ce_pair, ci_pair, Ue, Ui; gpu_threads=128)
-        Metal.synchronize()
+        for boundary in (:periodic, :edge, :zero)
+            RSEModel.separable_convolution!(out_e_separate, ce_separate, Ue; gpu_threads=128, boundary=boundary)
+            RSEModel.separable_convolution!(out_i_separate, ci_separate, Ui; gpu_threads=128, boundary=boundary)
+            RSEModel.separable_convolution_pair!(
+                out_e_pair,
+                out_i_pair,
+                ce_pair,
+                ci_pair,
+                Ue,
+                Ui;
+                gpu_threads=128,
+                boundary=boundary,
+            )
+            Metal.synchronize()
 
-        @test Array(out_e_pair) ≈ Array(out_e_separate) rtol=1e-6 atol=1e-6
-        @test Array(out_i_pair) ≈ Array(out_i_separate) rtol=1e-6 atol=1e-6
+            @test Array(out_e_pair) ≈ Array(out_e_separate) rtol=1e-6 atol=1e-6
+            @test Array(out_i_pair) ≈ Array(out_i_separate) rtol=1e-6 atol=1e-6
+        end
     else
         @test_skip "Metal.jl is not functional on this machine."
     end
@@ -131,6 +157,10 @@ end
         "speed" => "0",
         "seed" => "42",
         "duty_cycle" => "25",
+        "boundary" => "edge",
+        "coupling" => "midline",
+        "coupling_strength" => "0.03",
+        "overlap_rows" => "5",
     ))
     @test config.backend == :metal
     @test config.convolution == :separable
@@ -139,6 +169,10 @@ end
     @test config.speed == 0
     @test config.seed == 42
     @test config.duty_cycle_percent == 25.0f0
+    @test config.boundary == :edge
+    @test config.coupling == :midline
+    @test config.coupling_strength == 0.03f0
+    @test config.overlap_rows == 6
 end
 
 @testset "live applet server" begin
@@ -150,11 +184,13 @@ end
         @test occursin("RSE Real-Time Viewer", String(response.body))
 
         address = "127.0.0.1:$(HTTP.port(server))"
-        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1") do ws
+        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=midline&overlap_rows=6") do ws
             hello = String(HTTP.WebSockets.receive(ws))
             frame = String(HTTP.WebSockets.receive(ws))
             @test occursin("\"type\":\"hello\"", hello)
             @test occursin("\"type\":\"frame\"", frame)
+            @test occursin("\"coupling\":\"midline\"", hello)
+            @test occursin("\"cols\":50", frame)
         end
     finally
         close(server)

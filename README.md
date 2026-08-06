@@ -108,6 +108,13 @@ state on Metal and only transfers one display frame per browser update. The
 first run may pause while Julia and Metal compile; subsequent streams are the
 useful real-time benchmark.
 
+The applet also includes experimental boundary and coupling controls. Boundary
+modes are `periodic`, `edge`, and `zero`; non-periodic boundaries require the
+Metal separable convolution path. Coupling mode `midline` runs left and right
+cortical sheets, weakly mixes mirrored top/bottom overlap bands, displays the
+two sheets side-by-side, and keeps the retinal view square through a simple
+hemifield projection.
+
 ### CLI examples
 
 ### Cortical and Retinal images

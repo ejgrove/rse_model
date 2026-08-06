@@ -16,12 +16,19 @@ Base.@kwdef struct LiveConfig
     speed::Float64 = 1.0
     gpu_threads::Int = 256
     kernel_cutoff::Float64 = 3.0
+    boundary::Symbol = :periodic
+    coupling::Symbol = :none
+    coupling_strength::Float32 = 0.02f0
+    overlap_rows::Int = 6
     max_frames::Int = 0
 end
 
 Base.@kwdef struct LiveFrame
     frame::Int
     N::Int
+    rows::Int
+    cols::Int
+    retinal_n::Int
     t::Float64
     lo::Float32
     hi::Float32
@@ -31,6 +38,7 @@ Base.@kwdef struct LiveFrame
     realtime_x::Float64
     steps_per_frame::Int
     data::Vector{UInt8}
+    retinal_data::Vector{UInt8}
 end
 
 function normalize_live_config(config::LiveConfig)
@@ -45,6 +53,11 @@ function normalize_live_config(config::LiveConfig)
     convolution in (:fft, :separable) || throw(ArgumentError("convolution must be :auto, :fft, or :separable."))
     backend == :metal || convolution == :fft ||
         throw(ArgumentError("The CPU live backend currently supports FFT convolution only."))
+    boundary = config.boundary
+    boundary in (:periodic, :edge, :zero) || throw(ArgumentError("boundary must be :periodic, :edge, or :zero."))
+    _validate_boundary(boundary, convolution, backend)
+    coupling = config.coupling
+    coupling in (:none, :midline) || throw(ArgumentError("coupling must be :none or :midline."))
 
     target_fps = max(1, config.target_fps)
     N = config.fast_n ? next_fast_odd_size(config.N) : odd_positive_int(config.N)
@@ -52,6 +65,9 @@ function normalize_live_config(config::LiveConfig)
     config.gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
     config.kernel_cutoff > 0 || throw(ArgumentError("kernel_cutoff must be positive."))
     config.max_frames >= 0 || throw(ArgumentError("max_frames must be non-negative."))
+    config.coupling_strength >= 0 || throw(ArgumentError("coupling_strength must be non-negative."))
+    overlap_rows = max(2, 2 * cld(config.overlap_rows, 2))
+    overlap_rows = min(overlap_rows, max(2, 2 * div(max(N - 1, 2), 4)))
     if config.duty_cycle_percent !== nothing
         0 <= config.duty_cycle_percent <= 100 ||
             throw(ArgumentError("duty_cycle_percent must be between 0 and 100."))
@@ -72,6 +88,10 @@ function normalize_live_config(config::LiveConfig)
         speed=config.speed,
         gpu_threads=config.gpu_threads,
         kernel_cutoff=config.kernel_cutoff,
+        boundary=boundary,
+        coupling=coupling,
+        coupling_strength=config.coupling_strength,
+        overlap_rows=overlap_rows,
         max_frames=config.max_frames,
     )
 end
@@ -135,6 +155,10 @@ function live_config_from_query(params::AbstractDict{String,String})
         speed=_parse_float(params, "speed", 1.0),
         gpu_threads=_parse_int(params, "gpu_threads", 256),
         kernel_cutoff=_parse_float(params, "kernel_cutoff", 3.0),
+        boundary=_parse_symbol(params, "boundary", :periodic),
+        coupling=_parse_symbol(params, "coupling", :none),
+        coupling_strength=_parse_float32(params, "coupling_strength", 0.02f0),
+        overlap_rows=_parse_int(params, "overlap_rows", 6),
         max_frames=_parse_int(params, "max_frames", 0),
     ))
 end
@@ -167,8 +191,10 @@ function _make_live_frame(
     frame_start_ns::UInt64,
     steps_per_frame::Integer,
     p::ModelParams,
+    retinal_activity::AbstractMatrix=activity,
 )
     bytes, lo, hi = _activity_bytes(activity)
+    retinal_bytes, _, _ = retinal_activity === activity ? (bytes, lo, hi) : _activity_bytes(retinal_activity)
     frame_ms = (time_ns() - frame_start_ns) / 1e6
     sim_ms = steps_per_frame * Float64(p.dt)
     ms_per_step = step_ms / steps_per_frame
@@ -176,7 +202,10 @@ function _make_live_frame(
 
     return LiveFrame(
         frame=Int(frame_idx),
-        N=size(activity, 1),
+        N=size(retinal_activity, 1),
+        rows=size(activity, 1),
+        cols=size(activity, 2),
+        retinal_n=size(retinal_activity, 1),
         t=Float64(t),
         lo=lo,
         hi=hi,
@@ -186,7 +215,24 @@ function _make_live_frame(
         realtime_x=realtime_x,
         steps_per_frame=steps_per_frame,
         data=bytes,
+        retinal_data=retinal_bytes,
     )
+end
+
+function _fill_coupled_views!(display, retinal, left_activity, right_activity)
+    rows, cols = size(left_activity)
+    mid_col = cld(cols, 2)
+    @inbounds for col in 1:cols, row in 1:rows
+        display[row, col] = left_activity[row, col]
+        display[row, cols + col] = right_activity[row, col]
+
+        if col <= mid_col
+            retinal[row, col] = right_activity[rows - row + 1, col]
+        else
+            retinal[row, col] = left_activity[row, col]
+        end
+    end
+    return display, retinal
 end
 
 function _throttle!(stream_start_ns::UInt64, config::LiveConfig, sim_elapsed_ms::Float64)
@@ -199,6 +245,7 @@ function _throttle!(stream_start_ns::UInt64, config::LiveConfig, sim_elapsed_ms:
 end
 
 function _stream_cpu_frames(callback::Function, config::LiveConfig)
+    config.coupling == :midline && return _stream_cpu_coupled_frames(callback, config)
     p = ModelParams{Float32}()
     rng = _rng(config.seed)
     Ue = rand(rng, Float32, config.N, config.N)
@@ -250,7 +297,107 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig)
     return frame_idx
 end
 
+function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
+    p = ModelParams{Float32}()
+    rng = _rng(config.seed)
+    N = config.N
+    Ue_left = rand(rng, Float32, N, N)
+    Ui_left = rand(rng, Float32, N, N)
+    Ue_right = rand(rng, Float32, N, N)
+    Ui_right = rand(rng, Float32, N, N)
+    Ke = generate_gaussian_kernel(config.Se, N; dtype=Float32)
+    Ki = generate_gaussian_kernel(config.Si, N; dtype=Float32)
+
+    convolver_e_left = FFTConvolver(Ke, Ue_left)
+    convolver_i_left = FFTConvolver(Ki, Ui_left)
+    convolver_e_right = FFTConvolver(Ke, Ue_right)
+    convolver_i_right = FFTConvolver(Ki, Ui_right)
+    Uec_left = similar(Ue_left)
+    Uic_left = similar(Ui_left)
+    Uec_right = similar(Ue_right)
+    Uic_right = similar(Ui_right)
+    noise_left = Array{Float32}(undef, 2, N, N)
+    noise_right = Array{Float32}(undef, 2, N, N)
+    activity_left = similar(Ue_left)
+    activity_right = similar(Ue_right)
+    display_activity = Matrix{Float32}(undef, N, 2N)
+    retinal_activity = Matrix{Float32}(undef, N, N)
+
+    steps_per_frame = _steps_per_frame(config, p)
+    stream_start = time_ns()
+    step_idx = 0
+    frame_idx = 0
+
+    while config.max_frames == 0 || frame_idx < config.max_frames
+        frame_idx += 1
+        frame_start = time_ns()
+        step_start = time_ns()
+        for _ in 1:steps_per_frame
+            t_step = Float32(step_idx) * p.dt
+            randn!(rng, noise_left)
+            randn!(rng, noise_right)
+            _step!(
+                Ue_left,
+                Ui_left,
+                Uec_left,
+                Uic_left,
+                convolver_e_left,
+                convolver_i_left,
+                noise_left,
+                config.A,
+                config.period,
+                t_step,
+                p,
+                config.duty_cycle_percent,
+            )
+            _step!(
+                Ue_right,
+                Ui_right,
+                Uec_right,
+                Uic_right,
+                convolver_e_right,
+                convolver_i_right,
+                noise_right,
+                config.A,
+                config.period,
+                t_step,
+                p,
+                config.duty_cycle_percent,
+            )
+            _apply_midline_coupling!(
+                Ue_left,
+                Ui_left,
+                Ue_right,
+                Ui_right,
+                config.coupling_strength,
+                config.overlap_rows,
+            )
+            step_idx += 1
+        end
+        step_ms = (time_ns() - step_start) / 1e6
+        @. activity_left = abs(Ue_left - Ui_left)
+        @. activity_right = abs(Ue_right - Ui_right)
+        _fill_coupled_views!(display_activity, retinal_activity, activity_left, activity_right)
+        t = Float32(step_idx) * p.dt
+        frame = _make_live_frame(
+            display_activity,
+            frame_idx,
+            t,
+            step_ms,
+            frame_start,
+            steps_per_frame,
+            p,
+            retinal_activity,
+        )
+        callback(frame) === false && break
+        _throttle!(stream_start, config, frame_idx * steps_per_frame * Float64(p.dt))
+    end
+
+    return frame_idx
+end
+
 function _stream_metal_frames(callback::Function, config::LiveConfig)
+    config.coupling == :midline && return _stream_metal_coupled_frames(callback, config)
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     p = ModelParams{Float32}()
     config.seed === nothing || Metal.seed!(config.seed)
@@ -321,6 +468,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig)
                     t_step,
                     p,
                     config.gpu_threads,
+                    config.boundary,
                     config.duty_cycle_percent,
                 )
             end
@@ -334,6 +482,168 @@ function _stream_metal_frames(callback::Function, config::LiveConfig)
         activity = Array(cortical_gpu)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p)
+        callback(frame) === false && break
+        _throttle!(stream_start, config, frame_idx * steps_per_frame * Float64(p.dt))
+    end
+
+    return frame_idx
+end
+
+function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
+    Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
+    p = ModelParams{Float32}()
+    config.seed === nothing || Metal.seed!(config.seed)
+    N = config.N
+
+    Ue_left = Metal.rand(Float32, N, N)
+    Ui_left = Metal.rand(Float32, N, N)
+    Ue_right = Metal.rand(Float32, N, N)
+    Ui_right = Metal.rand(Float32, N, N)
+
+    if config.convolution == :fft
+        Ke = generate_gaussian_kernel(config.Se, N; dtype=Float32)
+        Ki = generate_gaussian_kernel(config.Si, N; dtype=Float32)
+        convolver_e_left = MetalFFTConvolver(Ke, Ue_left)
+        convolver_i_left = MetalFFTConvolver(Ki, Ui_left)
+        convolver_e_right = MetalFFTConvolver(Ke, Ue_right)
+        convolver_i_right = MetalFFTConvolver(Ki, Ui_right)
+    else
+        convolver_e_left = MetalSeparableConvolver(config.Se, Ue_left; cutoff=config.kernel_cutoff)
+        convolver_i_left = MetalSeparableConvolver(config.Si, Ui_left; cutoff=config.kernel_cutoff)
+        convolver_e_right = MetalSeparableConvolver(config.Se, Ue_right; cutoff=config.kernel_cutoff)
+        convolver_i_right = MetalSeparableConvolver(config.Si, Ui_right; cutoff=config.kernel_cutoff)
+    end
+
+    Uec_left = similar(Ue_left)
+    Uic_left = similar(Ui_left)
+    Uec_right = similar(Ue_right)
+    Uic_right = similar(Ui_right)
+    noise_E_left = similar(Ue_left)
+    noise_I_left = similar(Ui_left)
+    noise_E_right = similar(Ue_right)
+    noise_I_right = similar(Ui_right)
+    activity_left_gpu = similar(Ue_left)
+    activity_right_gpu = similar(Ue_right)
+    display_activity = Matrix{Float32}(undef, N, 2N)
+    retinal_activity = Matrix{Float32}(undef, N, N)
+
+    steps_per_frame = _steps_per_frame(config, p)
+    stream_start = time_ns()
+    step_idx = 0
+    frame_idx = 0
+
+    while config.max_frames == 0 || frame_idx < config.max_frames
+        frame_idx += 1
+        frame_start = time_ns()
+        step_start = time_ns()
+        for _ in 1:steps_per_frame
+            t_step = Float32(step_idx) * p.dt
+            Metal.randn!(noise_E_left)
+            Metal.randn!(noise_I_left)
+            Metal.randn!(noise_E_right)
+            Metal.randn!(noise_I_right)
+
+            if config.convolution == :fft
+                _metal_step!(
+                    Ue_left,
+                    Ui_left,
+                    Uec_left,
+                    Uic_left,
+                    convolver_e_left,
+                    convolver_i_left,
+                    noise_E_left,
+                    noise_I_left,
+                    config.A,
+                    config.period,
+                    t_step,
+                    p,
+                    config.gpu_threads,
+                    config.duty_cycle_percent,
+                )
+                _metal_step!(
+                    Ue_right,
+                    Ui_right,
+                    Uec_right,
+                    Uic_right,
+                    convolver_e_right,
+                    convolver_i_right,
+                    noise_E_right,
+                    noise_I_right,
+                    config.A,
+                    config.period,
+                    t_step,
+                    p,
+                    config.gpu_threads,
+                    config.duty_cycle_percent,
+                )
+            else
+                _metal_step_separable!(
+                    Ue_left,
+                    Ui_left,
+                    Uec_left,
+                    Uic_left,
+                    convolver_e_left,
+                    convolver_i_left,
+                    noise_E_left,
+                    noise_I_left,
+                    config.A,
+                    config.period,
+                    t_step,
+                    p,
+                    config.gpu_threads,
+                    config.boundary,
+                    config.duty_cycle_percent,
+                )
+                _metal_step_separable!(
+                    Ue_right,
+                    Ui_right,
+                    Uec_right,
+                    Uic_right,
+                    convolver_e_right,
+                    convolver_i_right,
+                    noise_E_right,
+                    noise_I_right,
+                    config.A,
+                    config.period,
+                    t_step,
+                    p,
+                    config.gpu_threads,
+                    config.boundary,
+                    config.duty_cycle_percent,
+                )
+            end
+
+            apply_midline_coupling!(
+                Ue_left,
+                Ui_left,
+                Ue_right,
+                Ui_right;
+                strength=config.coupling_strength,
+                overlap_rows=config.overlap_rows,
+                gpu_threads=config.gpu_threads,
+            )
+            step_idx += 1
+        end
+        Metal.synchronize()
+        step_ms = (time_ns() - step_start) / 1e6
+
+        activity_left_gpu .= abs.(Ue_left .- Ui_left)
+        activity_right_gpu .= abs.(Ue_right .- Ui_right)
+        Metal.synchronize()
+        activity_left = Array(activity_left_gpu)
+        activity_right = Array(activity_right_gpu)
+        _fill_coupled_views!(display_activity, retinal_activity, activity_left, activity_right)
+        t = Float32(step_idx) * p.dt
+        frame = _make_live_frame(
+            display_activity,
+            frame_idx,
+            t,
+            step_ms,
+            frame_start,
+            steps_per_frame,
+            p,
+            retinal_activity,
+        )
         callback(frame) === false && break
         _throttle!(stream_start, config, frame_idx * steps_per_frame * Float64(p.dt))
     end
@@ -384,6 +694,10 @@ function _hello_json(config::LiveConfig)
         ",\"Se\":", _json_number(config.Se),
         ",\"Si\":", _json_number(config.Si),
         ",\"kernelCutoff\":", _json_number(config.kernel_cutoff),
+        ",\"boundary\":", _json_string(config.boundary),
+        ",\"coupling\":", _json_string(config.coupling),
+        ",\"couplingStrength\":", _json_number(config.coupling_strength; digits=5),
+        ",\"overlapRows\":", config.overlap_rows,
         "}",
     )
 end
@@ -393,6 +707,9 @@ function _frame_json(frame::LiveFrame)
         "{\"type\":\"frame\"",
         ",\"frame\":", frame.frame,
         ",\"N\":", frame.N,
+        ",\"rows\":", frame.rows,
+        ",\"cols\":", frame.cols,
+        ",\"retinalN\":", frame.retinal_n,
         ",\"t\":", _json_number(frame.t),
         ",\"min\":", _json_number(frame.lo; digits=6),
         ",\"max\":", _json_number(frame.hi; digits=6),
@@ -402,6 +719,7 @@ function _frame_json(frame::LiveFrame)
         ",\"realtimeX\":", _json_number(frame.realtime_x),
         ",\"stepsPerFrame\":", frame.steps_per_frame,
         ",\"data\":", _json_string(base64encode(frame.data)),
+        ",\"retinalData\":", _json_string(base64encode(frame.retinal_data)),
         "}",
     )
 end
@@ -826,11 +1144,15 @@ const APPLET_HTML = raw"""
         <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
         <label>Backend<select id="backend"><option value="metal">metal</option><option value="cpu">cpu</option></select></label>
         <label>Convolution<select id="conv"><option value="auto">auto</option><option value="separable">separable</option><option value="fft">fft</option></select></label>
+        <label>Boundary<select id="boundary"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
+        <label>Coupling<select id="coupling"><option value="none">none</option><option value="midline">midline</option></select></label>
         <label>Speed<select id="speed"><option value="1">1x real time</option><option value="0.5">0.5x</option><option value="2">2x</option><option value="0">max</option></select></label>
         <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
         <label>A<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
         <label>T (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
         <label>Duty (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
+        <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
+        <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
         <label>Se<input id="se" type="number" min="0.1" step="0.1" value="2"></label>
         <label>Si<input id="si" type="number" min="0.1" step="0.1" value="5"></label>
       </div>
@@ -881,11 +1203,15 @@ const APPLET_HTML = raw"""
       fps: document.getElementById("fps"),
       backend: document.getElementById("backend"),
       conv: document.getElementById("conv"),
+      boundary: document.getElementById("boundary"),
+      coupling: document.getElementById("coupling"),
       speed: document.getElementById("speed"),
       kernelCutoff: document.getElementById("kernelCutoff"),
       amp: document.getElementById("amp"),
       period: document.getElementById("period"),
       duty: document.getElementById("duty"),
+      couplingStrength: document.getElementById("couplingStrength"),
+      overlapRows: document.getElementById("overlapRows"),
       se: document.getElementById("se"),
       si: document.getElementById("si"),
       fastN: document.getElementById("fastN"),
@@ -926,17 +1252,18 @@ const APPLET_HTML = raw"""
       ];
     }
 
-    function setCanvasSize(canvas, n) {
-      if (canvas.width !== n || canvas.height !== n) {
-        canvas.width = n;
-        canvas.height = n;
+    function setCanvasSize(canvas, rows, cols) {
+      if (canvas.width !== cols || canvas.height !== rows) {
+        canvas.width = cols;
+        canvas.height = rows;
       }
+      canvas.style.aspectRatio = `${cols} / ${rows}`;
     }
 
-    function drawValues(canvas, values, n) {
-      setCanvasSize(canvas, n);
+    function drawValues(canvas, values, rows, cols) {
+      setCanvasSize(canvas, rows, cols);
       const ctx = canvas.getContext("2d");
-      const image = ctx.createImageData(n, n);
+      const image = ctx.createImageData(cols, rows);
       for (let i = 0; i < values.length; i++) {
         const [r, g, b] = palette(values[i]);
         const j = i * 4;
@@ -1093,7 +1420,7 @@ const APPLET_HTML = raw"""
         const bottom = (1 - m.dx) * v10 + m.dx * v11;
         mapped[i] = Math.max(0, Math.min(255, Math.round((1 - m.dy) * top + m.dy * bottom)));
       }
-      drawValues(canvas, mapped, n);
+      drawValues(canvas, mapped, n, n);
     }
 
     function decodeFrame(data) {
@@ -1109,11 +1436,15 @@ const APPLET_HTML = raw"""
       params.set("fps", els.fps.value);
       params.set("backend", els.backend.value);
       params.set("conv", els.conv.value);
+      params.set("boundary", els.boundary.value);
+      params.set("coupling", els.coupling.value);
       params.set("speed", els.speed.value);
       params.set("kernel_cutoff", els.kernelCutoff.value);
       params.set("A", els.amp.value);
       params.set("T", els.period.value);
       params.set("duty_cycle", els.duty.value);
+      params.set("coupling_strength", els.couplingStrength.value);
+      params.set("overlap_rows", els.overlapRows.value);
       params.set("Se", els.se.value);
       params.set("Si", els.si.value);
       params.set("fast_n", els.fastN.checked ? "true" : "false");
@@ -1142,7 +1473,8 @@ const APPLET_HTML = raw"""
         if (msg.type === "hello") {
           els.gridN.textContent = String(msg.N);
           const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} at target ${msg.fps} fps, ${duty}.`;
+          const coupling = msg.coupling === "midline" ? `, midline g=${msg.couplingStrength}` : "";
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv}/${msg.boundary} at target ${msg.fps} fps, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {
@@ -1160,8 +1492,12 @@ const APPLET_HTML = raw"""
         const observedFps = 1000 / Math.max(1, now - lastFrameAt);
         lastFrameAt = now;
         const values = decodeFrame(msg.data);
-        drawValues(els.cortical, values, msg.N);
-        drawRetinal(els.retinal, values, msg.N);
+        const rows = msg.rows || msg.N;
+        const cols = msg.cols || msg.N;
+        const retinalValues = decodeFrame(msg.retinalData || msg.data);
+        const retinalN = msg.retinalN || msg.N;
+        drawValues(els.cortical, values, rows, cols);
+        drawRetinal(els.retinal, retinalValues, retinalN);
         els.simTime.textContent = `${msg.t.toFixed(1)} ms`;
         els.streamFps.textContent = observedFps.toFixed(1);
         els.msStep.textContent = msg.msPerStep.toFixed(3);

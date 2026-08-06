@@ -4,6 +4,9 @@ using Metal
 using Random
 
 const DEFAULT_FFT_FLAGS = FFTW.MEASURE
+const BOUNDARY_PERIODIC = UInt32(0)
+const BOUNDARY_EDGE = UInt32(1)
+const BOUNDARY_ZERO = UInt32(2)
 
 firing_rate(x) = inv(one(x) + exp(-x))
 
@@ -31,6 +34,21 @@ function strobe_stimulus(t, A, period, p::ModelParams, duty_cycle_percent=nothin
     T = promote_type(typeof(t), typeof(A), typeof(period), typeof(p.V))
     threshold = T(_stimulus_threshold(p, duty_cycle_percent))
     return T(A) * step_function(sin((T(2) * T(pi) * T(t)) / T(period)) - threshold)
+end
+
+function _boundary_code(boundary::Symbol)
+    boundary == :periodic && return BOUNDARY_PERIODIC
+    boundary == :edge && return BOUNDARY_EDGE
+    boundary == :zero && return BOUNDARY_ZERO
+    throw(ArgumentError("boundary must be :periodic, :edge, or :zero."))
+end
+
+function _validate_boundary(boundary::Symbol, convolution::Symbol, backend::Symbol)
+    _boundary_code(boundary)
+    if boundary != :periodic && (backend != :metal || convolution != :separable)
+        throw(ArgumentError("Only the Metal separable convolution path supports non-periodic boundaries."))
+    end
+    return boundary
 end
 
 struct FFTConvolver{T,P,Q}
@@ -139,6 +157,36 @@ function _step!(
     return Ue, Ui
 end
 
+function _apply_midline_coupling!(Ue_left, Ui_left, Ue_right, Ui_right, strength, overlap_rows)
+    strength <= 0 && return Ue_left, Ui_left, Ue_right, Ui_right
+    rows, cols = size(Ue_left)
+    band_rows = max(1, div(overlap_rows, 2))
+    band_rows = min(band_rows, div(rows, 2))
+    mix = eltype(Ue_left)(strength)
+
+    @inbounds for col in 1:cols, row_offset in 0:(band_rows - 1)
+        left_top = row_offset + 1
+        right_top = band_rows - row_offset
+        _mix_pair!(Ue_left, Ue_right, left_top, right_top, col, mix)
+        _mix_pair!(Ui_left, Ui_right, left_top, right_top, col, mix)
+
+        left_bottom = rows - band_rows + row_offset + 1
+        right_bottom = rows - row_offset
+        _mix_pair!(Ue_left, Ue_right, left_bottom, right_bottom, col, mix)
+        _mix_pair!(Ui_left, Ui_right, left_bottom, right_bottom, col, mix)
+    end
+
+    return Ue_left, Ui_left, Ue_right, Ui_right
+end
+
+function _mix_pair!(left, right, left_row, right_row, col, mix)
+    left_value = left[left_row, col]
+    right_value = right[right_row, col]
+    left[left_row, col] = left_value + mix * (right_value - left_value)
+    right[right_row, col] = right_value + mix * (left_value - right_value)
+    return
+end
+
 struct MetalFFTConvolver{P,Q,K,W}
     forward_plan::P
     inverse_plan::Q
@@ -187,7 +235,7 @@ function fft_convolution!(out, convolver::MetalFFTConvolver, U)
     return out
 end
 
-function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, n)
+function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, n, boundary_code)
     i = thread_position_in_grid().x
     if i <= n
         row0 = (i - 1) % rows
@@ -195,16 +243,26 @@ function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, 
         acc = 0.0f0
         for k in 1:klen
             offset = Int32(k) - Int32(radius) - Int32(1)
-            source_col0 = mod(Int32(col0) + offset, Int32(cols))
-            source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
-            acc += input[source_idx] * kernel[k]
+            source_col = Int32(col0) + offset
+            if boundary_code == BOUNDARY_PERIODIC
+                source_col0 = mod(source_col, Int32(cols))
+                source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+                acc += input[source_idx] * kernel[k]
+            elseif boundary_code == BOUNDARY_EDGE
+                source_col0 = min(max(source_col, Int32(0)), Int32(cols) - Int32(1))
+                source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+                acc += input[source_idx] * kernel[k]
+            elseif source_col >= Int32(0) && source_col < Int32(cols)
+                source_idx = row0 + UInt32(source_col) * rows + UInt32(1)
+                acc += input[source_idx] * kernel[k]
+            end
         end
         out[i] = acc
     end
     return
 end
 
-function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, n)
+function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, n, boundary_code)
     i = thread_position_in_grid().x
     if i <= n
         row0 = (i - 1) % rows
@@ -212,9 +270,19 @@ function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, 
         acc = 0.0f0
         for k in 1:klen
             offset = Int32(k) - Int32(radius) - Int32(1)
-            source_row0 = mod(Int32(row0) + offset, Int32(rows))
-            source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
-            acc += input[source_idx] * kernel[k]
+            source_row = Int32(row0) + offset
+            if boundary_code == BOUNDARY_PERIODIC
+                source_row0 = mod(source_row, Int32(rows))
+                source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+                acc += input[source_idx] * kernel[k]
+            elseif boundary_code == BOUNDARY_EDGE
+                source_row0 = min(max(source_row, Int32(0)), Int32(rows) - Int32(1))
+                source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+                acc += input[source_idx] * kernel[k]
+            elseif source_row >= Int32(0) && source_row < Int32(rows)
+                source_idx = UInt32(source_row) + col0 * rows + UInt32(1)
+                acc += input[source_idx] * kernel[k]
+            end
         end
         out[i] = acc
     end
@@ -235,6 +303,7 @@ function _metal_conv_cols_pair_kernel!(
     klen_e,
     klen_i,
     n,
+    boundary_code,
 )
     i = thread_position_in_grid().x
     if i <= n
@@ -244,18 +313,38 @@ function _metal_conv_cols_pair_kernel!(
         acc_e = 0.0f0
         for k in 1:klen_e
             offset = Int32(k) - Int32(radius_e) - Int32(1)
-            source_col0 = mod(Int32(col0) + offset, Int32(cols))
-            source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
-            acc_e += input_e[source_idx] * kernel_e[k]
+            source_col = Int32(col0) + offset
+            if boundary_code == BOUNDARY_PERIODIC
+                source_col0 = mod(source_col, Int32(cols))
+                source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+                acc_e += input_e[source_idx] * kernel_e[k]
+            elseif boundary_code == BOUNDARY_EDGE
+                source_col0 = min(max(source_col, Int32(0)), Int32(cols) - Int32(1))
+                source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+                acc_e += input_e[source_idx] * kernel_e[k]
+            elseif source_col >= Int32(0) && source_col < Int32(cols)
+                source_idx = row0 + UInt32(source_col) * rows + UInt32(1)
+                acc_e += input_e[source_idx] * kernel_e[k]
+            end
         end
         out_e[i] = acc_e
 
         acc_i = 0.0f0
         for k in 1:klen_i
             offset = Int32(k) - Int32(radius_i) - Int32(1)
-            source_col0 = mod(Int32(col0) + offset, Int32(cols))
-            source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
-            acc_i += input_i[source_idx] * kernel_i[k]
+            source_col = Int32(col0) + offset
+            if boundary_code == BOUNDARY_PERIODIC
+                source_col0 = mod(source_col, Int32(cols))
+                source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+                acc_i += input_i[source_idx] * kernel_i[k]
+            elseif boundary_code == BOUNDARY_EDGE
+                source_col0 = min(max(source_col, Int32(0)), Int32(cols) - Int32(1))
+                source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+                acc_i += input_i[source_idx] * kernel_i[k]
+            elseif source_col >= Int32(0) && source_col < Int32(cols)
+                source_idx = row0 + UInt32(source_col) * rows + UInt32(1)
+                acc_i += input_i[source_idx] * kernel_i[k]
+            end
         end
         out_i[i] = acc_i
     end
@@ -276,6 +365,7 @@ function _metal_conv_rows_pair_kernel!(
     klen_e,
     klen_i,
     n,
+    boundary_code,
 )
     i = thread_position_in_grid().x
     if i <= n
@@ -285,18 +375,38 @@ function _metal_conv_rows_pair_kernel!(
         acc_e = 0.0f0
         for k in 1:klen_e
             offset = Int32(k) - Int32(radius_e) - Int32(1)
-            source_row0 = mod(Int32(row0) + offset, Int32(rows))
-            source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
-            acc_e += input_e[source_idx] * kernel_e[k]
+            source_row = Int32(row0) + offset
+            if boundary_code == BOUNDARY_PERIODIC
+                source_row0 = mod(source_row, Int32(rows))
+                source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+                acc_e += input_e[source_idx] * kernel_e[k]
+            elseif boundary_code == BOUNDARY_EDGE
+                source_row0 = min(max(source_row, Int32(0)), Int32(rows) - Int32(1))
+                source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+                acc_e += input_e[source_idx] * kernel_e[k]
+            elseif source_row >= Int32(0) && source_row < Int32(rows)
+                source_idx = UInt32(source_row) + col0 * rows + UInt32(1)
+                acc_e += input_e[source_idx] * kernel_e[k]
+            end
         end
         out_e[i] = acc_e
 
         acc_i = 0.0f0
         for k in 1:klen_i
             offset = Int32(k) - Int32(radius_i) - Int32(1)
-            source_row0 = mod(Int32(row0) + offset, Int32(rows))
-            source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
-            acc_i += input_i[source_idx] * kernel_i[k]
+            source_row = Int32(row0) + offset
+            if boundary_code == BOUNDARY_PERIODIC
+                source_row0 = mod(source_row, Int32(rows))
+                source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+                acc_i += input_i[source_idx] * kernel_i[k]
+            elseif boundary_code == BOUNDARY_EDGE
+                source_row0 = min(max(source_row, Int32(0)), Int32(rows) - Int32(1))
+                source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+                acc_i += input_i[source_idx] * kernel_i[k]
+            elseif source_row >= Int32(0) && source_row < Int32(rows)
+                source_idx = UInt32(source_row) + col0 * rows + UInt32(1)
+                acc_i += input_i[source_idx] * kernel_i[k]
+            end
         end
         out_i[i] = acc_i
     end
@@ -308,6 +418,7 @@ function separable_convolution!(
     convolver::MetalSeparableConvolver,
     U;
     gpu_threads::Integer=256,
+    boundary::Symbol=:periodic,
 )
     rows_u, cols_u = size(U)
     rows = UInt32(rows_u)
@@ -315,6 +426,7 @@ function separable_convolution!(
     n = UInt32(length(U))
     klen = UInt32(length(convolver.kernel))
     radius = UInt32(convolver.radius)
+    boundary_code = _boundary_code(boundary)
     threads = min(gpu_threads, length(U))
     groups = cld(length(U), threads)
 
@@ -327,6 +439,7 @@ function separable_convolution!(
         cols,
         klen,
         n,
+        boundary_code,
     )
     @metal threads=threads groups=groups _metal_conv_rows_kernel!(
         out,
@@ -337,6 +450,7 @@ function separable_convolution!(
         cols,
         klen,
         n,
+        boundary_code,
     )
 
     return out
@@ -350,6 +464,7 @@ function separable_convolution_pair!(
     Ue,
     Ui;
     gpu_threads::Integer=256,
+    boundary::Symbol=:periodic,
 )
     rows_u, cols_u = size(Ue)
     rows = UInt32(rows_u)
@@ -359,6 +474,7 @@ function separable_convolution_pair!(
     klen_i = UInt32(length(convolver_i.kernel))
     radius_e = UInt32(convolver_e.radius)
     radius_i = UInt32(convolver_i.radius)
+    boundary_code = _boundary_code(boundary)
     threads = min(gpu_threads, length(Ue))
     groups = cld(length(Ue), threads)
 
@@ -376,6 +492,7 @@ function separable_convolution_pair!(
         klen_e,
         klen_i,
         n,
+        boundary_code,
     )
     @metal threads=threads groups=groups _metal_conv_rows_pair_kernel!(
         out_e,
@@ -391,6 +508,7 @@ function separable_convolution_pair!(
         klen_e,
         klen_i,
         n,
+        boundary_code,
     )
 
     return out_e, out_i
@@ -428,6 +546,79 @@ function _metal_euler_kernel!(
         Ui[i] += dt_over_Ti * (-Ui[i] + inv(1.0f0 + exp(-input_i)))
     end
     return
+end
+
+function _metal_midline_coupling_kernel!(
+    Ue_left,
+    Ui_left,
+    Ue_right,
+    Ui_right,
+    strength,
+    rows,
+    cols,
+    band_rows,
+    n,
+)
+    i = thread_position_in_grid().x
+    if i <= n
+        band_area = band_rows * cols
+        band = (i - UInt32(1)) ÷ band_area
+        local_i = (i - UInt32(1)) % band_area
+        row_offset = local_i % band_rows
+        col0 = local_i ÷ band_rows
+
+        left_row0 = row_offset
+        right_row0 = band_rows - row_offset - UInt32(1)
+        if band == UInt32(1)
+            left_row0 = rows - band_rows + row_offset
+            right_row0 = rows - row_offset - UInt32(1)
+        end
+
+        left_idx = left_row0 + col0 * rows + UInt32(1)
+        right_idx = right_row0 + col0 * rows + UInt32(1)
+
+        left_e = Ue_left[left_idx]
+        right_e = Ue_right[right_idx]
+        left_i = Ui_left[left_idx]
+        right_i = Ui_right[right_idx]
+
+        Ue_left[left_idx] = left_e + strength * (right_e - left_e)
+        Ue_right[right_idx] = right_e + strength * (left_e - right_e)
+        Ui_left[left_idx] = left_i + strength * (right_i - left_i)
+        Ui_right[right_idx] = right_i + strength * (left_i - right_i)
+    end
+    return
+end
+
+function apply_midline_coupling!(
+    Ue_left,
+    Ui_left,
+    Ue_right,
+    Ui_right;
+    strength::Real,
+    overlap_rows::Integer,
+    gpu_threads::Integer=256,
+)
+    strength <= 0 && return Ue_left, Ui_left, Ue_right, Ui_right
+    rows_u, cols_u = size(Ue_left)
+    band_rows_u = min(max(1, div(overlap_rows, 2)), div(rows_u, 2))
+    n_pairs = 2 * band_rows_u * cols_u
+    threads = min(gpu_threads, n_pairs)
+    groups = cld(n_pairs, threads)
+
+    @metal threads=threads groups=groups _metal_midline_coupling_kernel!(
+        Ue_left,
+        Ui_left,
+        Ue_right,
+        Ui_right,
+        Float32(strength),
+        UInt32(rows_u),
+        UInt32(cols_u),
+        UInt32(band_rows_u),
+        UInt32(n_pairs),
+    )
+
+    return Ue_left, Ui_left, Ue_right, Ui_right
 end
 
 function _metal_step!(
@@ -493,6 +684,7 @@ function _metal_step_separable!(
     t::Float32,
     p::ModelParams{Float32},
     gpu_threads::Integer,
+    boundary::Symbol=:periodic,
     duty_cycle_percent=nothing,
 )
     separable_convolution_pair!(
@@ -503,6 +695,7 @@ function _metal_step_separable!(
         Ue,
         Ui;
         gpu_threads=gpu_threads,
+        boundary=boundary,
     )
 
     stim = strobe_stimulus(t, A, period, p, duty_cycle_percent)
@@ -567,11 +760,13 @@ function run_simulation_gpu(;
     gpu_threads::Integer=256,
     convolution::Symbol=:separable,
     kernel_cutoff::Real=3.0,
+    boundary::Symbol=:periodic,
     duty_cycle_percent=nothing,
 ) where {F<:AbstractFloat}
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     dtype === Float32 || throw(ArgumentError("The Metal backend currently supports Float32 only."))
     gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
+    _validate_boundary(boundary, convolution, :metal)
 
     timer_start = time_ns()
     pT = _params_as(Float32, p)
@@ -652,6 +847,7 @@ function run_simulation_gpu(;
                 t,
                 pT,
                 gpu_threads,
+                boundary,
                 duty_cycle_percent,
             )
         end
@@ -700,6 +896,7 @@ function run_simulation(;
     gpu_threads::Integer=256,
     convolution::Symbol=:fft,
     kernel_cutoff::Real=3.0,
+    boundary::Symbol=:periodic,
     duty_cycle_percent=nothing,
 ) where {F<:AbstractFloat}
     if backend in (:metal, :gpu)
@@ -721,12 +918,14 @@ function run_simulation(;
             gpu_threads=gpu_threads,
             convolution=convolution,
             kernel_cutoff=kernel_cutoff,
+            boundary=boundary,
             duty_cycle_percent=duty_cycle_percent,
         )
     elseif backend != :cpu
         throw(ArgumentError("backend must be :cpu or :metal"))
     end
     convolution == :fft || throw(ArgumentError("The CPU backend currently supports :fft convolution only."))
+    _validate_boundary(boundary, convolution, :cpu)
 
     timer_start = time_ns()
     pT = _params_as(dtype, p)
