@@ -162,6 +162,27 @@ end
     @test size(ret) == size(img)
 end
 
+@testset "parameter search smoke" begin
+    out_path = mktempdir()
+    result_path = run_parameter_search(ParameterSearchConfig(
+        N=9,
+        A_values=[0.2],
+        period_values=[10.0],
+        times_ms=[10],
+        Se=2.0,
+        Si=5.0,
+        backend=:cpu,
+        convolution=:fft,
+        seed=1,
+        view=:cortical,
+        out_path=out_path,
+        overwrite=true,
+    ))
+    @test result_path == out_path
+    @test isfile(joinpath(out_path, "summary.csv"))
+    @test isfile(joinpath(out_path, "parameter_search_cortical_00010ms.png"))
+end
+
 @testset "live applet config" begin
     config = live_config_from_query(Dict(
         "backend" => "gpu",

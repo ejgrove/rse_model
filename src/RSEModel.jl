@@ -4,6 +4,7 @@ include("Params.jl")
 include("Kernels.jl")
 include("Model.jl")
 include("Visualization.jl")
+include("ParameterSearch.jl")
 include("CommandLine.jl")
 include("Applet.jl")
 
@@ -25,6 +26,9 @@ export ModelParams,
     make_images,
     make_plot,
     make_gif,
+    ParameterSearchConfig,
+    run_parameter_search,
+    parameter_search_main,
     is_fast_fft_size,
     next_fast_odd_size,
     odd_positive_int,

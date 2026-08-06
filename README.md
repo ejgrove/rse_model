@@ -109,12 +109,31 @@ first run may pause while Julia and Metal compile; subsequent streams are the
 useful real-time benchmark.
 
 The applet also includes experimental boundary and coupling controls. Boundary
-modes are `periodic`, `edge`, and `zero`, with separate X (left/right) and Y
-(top/bottom) selectors; non-periodic boundaries require the Metal separable
-convolution path. Coupling mode `midline` runs left and right cortical sheets,
-weakly mixes mirrored top/bottom overlap bands, displays the two sheets
-side-by-side, and keeps the retinal view square through a simple hemifield
-projection.
+modes are `periodic`, `edge`, and `zero`; non-periodic boundaries require the
+Metal separable convolution path. Coupling mode `midline` runs left and right
+cortical sheets, weakly mixes mirrored top/bottom overlap bands, displays the
+two sheets side-by-side, and keeps the retinal view square through a simple
+hemifield projection.
+
+## Parameter Search
+Run an `A x T` sweep and save one montage per requested time point:
+
+```bash
+julia --project=. scripts/parameter_search.jl
+```
+
+The defaults match the first broad search: `N=81`, `Se=2`, `Si=5`, periodic
+boundary, `T=10:5:150 ms`, `A=0.2:0.1:1.5`, and snapshots at `5,10,15,20 s`.
+Outputs are written to `outputs/parameter_search...` as four PNG montages plus
+`summary.csv`. Each montage has `T` on the x axis and `A` on the y axis.
+
+Useful overrides:
+
+```bash
+julia --project=. scripts/parameter_search.jl --view cortical --backend cpu
+julia --project=. scripts/parameter_search.jl --T-range 40 120 5 --A-range 0.4 1.2 0.1 --times-sec 5,10
+julia --project=. scripts/parameter_search.jl --dry-run
+```
 
 ### CLI examples
 
