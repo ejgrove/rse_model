@@ -122,15 +122,17 @@ Run an `A x T` sweep and save one montage per requested time point:
 julia --project=. scripts/parameter_search.jl
 ```
 
-The defaults match the first broad search: `N=81`, `Se=2`, `Si=5`, periodic
-boundary, `T=10:5:150 ms`, `A=0.2:0.1:1.5`, and snapshots at `5,10,15,20 s`.
-Outputs are written to `outputs/parameter_search...` as four PNG montages plus
-`summary.csv`. Each montage has `T` on the x axis and `A` on the y axis.
+The defaults match the first broad search: `N=81`, `Se=2`, `Si=5`, `50%` duty
+cycle, periodic boundary, `T=10:5:150 ms`, `A=0.2:0.1:1.5`, and snapshots at
+`5,10,15,20 s`. Outputs are written to `outputs/parameter_search...` as four
+PNG montages plus `summary.csv`. Each montage has `T` on the x axis and `A` on
+the y axis.
 
 Useful overrides:
 
 ```bash
 julia --project=. scripts/parameter_search.jl --view cortical --backend cpu
+julia --project=. scripts/parameter_search.jl --backend cpu --workers 6 --duty-cycle 50
 julia --project=. scripts/parameter_search.jl --T-range 40 120 5 --A-range 0.4 1.2 0.1 --times-sec 5,10
 julia --project=. scripts/parameter_search.jl --dry-run
 ```

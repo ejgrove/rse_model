@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "55eea8af074a23ee414877327222ddf63fab0601"
+project_hash = "2acfcc71223bf6ee5a8c72bbc312c8cae4a63cae"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -117,6 +117,11 @@ version = "1.0.0"
 [[deps.Dates]]
 deps = ["Printf"]
 uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
+version = "1.11.0"
+
+[[deps.Distributed]]
+deps = ["Random", "Serialization", "Sockets"]
+uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 version = "1.11.0"
 
 [[deps.Downloads]]
@@ -418,7 +423,7 @@ uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 version = "1.11.0"
 
 [[deps.RSEModel]]
-deps = ["ArgParse", "Base64", "FFTW", "HTTP", "LinearAlgebra", "Metal", "Random"]
+deps = ["ArgParse", "Base64", "Distributed", "FFTW", "HTTP", "LinearAlgebra", "Metal", "Random"]
 path = "."
 uuid = "a972fd3c-3c4f-4c6f-a86f-2a01f4e55a3d"
 version = "0.1.0"

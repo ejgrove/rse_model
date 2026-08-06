@@ -1,4 +1,5 @@
 using ArgParse
+using Distributed
 
 Base.@kwdef struct ParameterSearchConfig
     N::Int = 81
@@ -10,6 +11,7 @@ Base.@kwdef struct ParameterSearchConfig
     backend::Symbol = :metal
     convolution::Symbol = :auto
     kernel_cutoff::Float64 = 3.0
+    duty_cycle_percent::Union{Nothing,Float64} = 50.0
     seed::Int = 42
     seed_mode::Symbol = :same
     view::Symbol = :retinal
@@ -19,6 +21,7 @@ Base.@kwdef struct ParameterSearchConfig
     fft_flags = DEFAULT_FFT_FLAGS
     fftw_threads::Int = 1
     gpu_threads::Int = 256
+    workers::Int = 1
     dry_run::Bool = false
 end
 
@@ -32,6 +35,7 @@ const SEARCH_FONT = Dict{Char,Tuple{Vararg{String,7}}}(
     '(' => ("00110", "01000", "10000", "10000", "10000", "01000", "00110"),
     ')' => ("11000", "00100", "00010", "00010", "00010", "00100", "11000"),
     '/' => ("00001", "00010", "00100", "01000", "10000", "00000", "00000"),
+    '%' => ("11001", "11010", "00010", "00100", "01000", "01011", "10011"),
     '0' => ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
     '1' => ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
     '2' => ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
@@ -61,6 +65,7 @@ const SEARCH_FONT = Dict{Char,Tuple{Vararg{String,7}}}(
     'r' => ("00000", "00000", "10110", "11001", "10000", "10000", "10000"),
     's' => ("00000", "00000", "01111", "10000", "01110", "00001", "11110"),
     't' => ("01000", "01000", "11100", "01000", "01000", "01001", "00110"),
+    'u' => ("00000", "00000", "10001", "10001", "10001", "10011", "01101"),
     'v' => ("00000", "00000", "10001", "10001", "10001", "01010", "00100"),
     'w' => ("00000", "00000", "10001", "10001", "10101", "10101", "01010"),
     'x' => ("00000", "00000", "10001", "01010", "00100", "01010", "10001"),
@@ -116,8 +121,13 @@ function _validate_search_config(config::ParameterSearchConfig)
     config.Se > 0 || throw(ArgumentError("Se must be positive."))
     config.Si > 0 || throw(ArgumentError("Si must be positive."))
     config.kernel_cutoff > 0 || throw(ArgumentError("kernel_cutoff must be positive."))
+    if config.duty_cycle_percent !== nothing
+        0 <= config.duty_cycle_percent <= 100 ||
+            throw(ArgumentError("duty_cycle_percent must be between 0 and 100."))
+    end
     config.fftw_threads > 0 || throw(ArgumentError("fftw_threads must be positive."))
     config.gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
+    config.workers > 0 || throw(ArgumentError("workers must be positive."))
     config.backend in (:cpu, :metal) || throw(ArgumentError("backend must be :cpu or :metal."))
     config.view in (:retinal, :cortical) || throw(ArgumentError("view must be :retinal or :cortical."))
     config.seed_mode in (:same, :increment) || throw(ArgumentError("seed_mode must be :same or :increment."))
@@ -130,6 +140,11 @@ function _validate_search_config(config::ParameterSearchConfig)
     convolution in (:fft, :separable) || throw(ArgumentError("convolution must be :auto, :fft, or :separable."))
     config.backend == :metal || convolution == :fft ||
         throw(ArgumentError("CPU parameter searches currently support FFT convolution only."))
+    workers = config.workers
+    if config.backend == :metal && workers > 1
+        @warn "Metal parameter searches use one GPU process; ignoring extra workers. Use --backend cpu --workers N to parallelize across CPU processes." workers
+        workers = 1
+    end
 
     return ParameterSearchConfig(
         N=N,
@@ -141,6 +156,7 @@ function _validate_search_config(config::ParameterSearchConfig)
         backend=config.backend,
         convolution=convolution,
         kernel_cutoff=config.kernel_cutoff,
+        duty_cycle_percent=config.duty_cycle_percent,
         seed=config.seed,
         seed_mode=config.seed_mode,
         view=config.view,
@@ -150,6 +166,7 @@ function _validate_search_config(config::ParameterSearchConfig)
         fft_flags=config.fft_flags,
         fftw_threads=config.fftw_threads,
         gpu_threads=config.gpu_threads,
+        workers=workers,
         dry_run=config.dry_run,
     )
 end
@@ -228,6 +245,7 @@ function _make_montage_canvas(config::ParameterSearchConfig, time_ms::Integer)
         config.view, " N=", config.N,
         " Se=", _compact_number(config.Se),
         " Si=", _compact_number(config.Si),
+        " duty=", _duty_text(config),
     )
     _draw_text!(canvas, 8, left_margin, title; scale=2)
     _draw_text!(canvas, 34, left_margin, "T (ms)"; scale=2)
@@ -267,6 +285,218 @@ function _prepare_search_output_dir(config::ParameterSearchConfig)
     return out_path
 end
 
+function _duty_text(config::ParameterSearchConfig)
+    config.duty_cycle_percent === nothing && return "model"
+    return string(_compact_number(config.duty_cycle_percent), "%")
+end
+
+function _search_jobs(config::ParameterSearchConfig)
+    total = length(config.A_values) * length(config.period_values)
+    jobs = NamedTuple[]
+    sim_index = 0
+
+    for (a_idx, amplitude) in enumerate(config.A_values)
+        for (t_idx, period) in enumerate(config.period_values)
+            sim_index += 1
+            push!(jobs, (
+                index=sim_index,
+                total=total,
+                a_idx=a_idx,
+                t_idx=t_idx,
+                amplitude=amplitude,
+                period=period,
+                seed=_seed_for_sim(config, sim_index),
+            ))
+        end
+    end
+
+    return jobs
+end
+
+function _run_parameter_search_job(job, config::ParameterSearchConfig, interval_ms::Integer, max_time_ms::Integer)
+    if config.backend == :cpu
+        FFTW.set_num_threads(config.fftw_threads)
+    end
+
+    sim_start = time_ns()
+    data = run_simulation(
+        N=config.N,
+        A=job.amplitude,
+        T=job.period,
+        Se=config.Se,
+        Si=config.Si,
+        start_time=minimum(config.times_ms),
+        end_time=max_time_ms,
+        seed=job.seed,
+        plot=false,
+        gif=false,
+        interval=interval_ms,
+        p=ModelParams(),
+        fps=50,
+        fft_flags=config.fft_flags,
+        backend=config.backend,
+        gpu_threads=config.gpu_threads,
+        convolution=config.convolution,
+        kernel_cutoff=config.kernel_cutoff,
+        boundary=:periodic,
+        duty_cycle_percent=config.duty_cycle_percent,
+    )
+    elapsed = (time_ns() - sim_start) / 1e9
+    snapshots = Dict(round(Int, snapshot.t) => snapshot for snapshot in data.images)
+    images = Dict{Int,Array{UInt8,3}}()
+
+    for time_ms in config.times_ms
+        snapshot = get(snapshots, time_ms, nothing)
+        snapshot === nothing && continue
+        images[time_ms] = _search_cell_rgb(snapshot, config.view, config.cmap)
+    end
+
+    return (
+        index=job.index,
+        total=job.total,
+        a_idx=job.a_idx,
+        t_idx=job.t_idx,
+        amplitude=job.amplitude,
+        period=job.period,
+        seed=job.seed,
+        compute_seconds=data.compute_seconds,
+        elapsed_seconds=elapsed,
+        images=images,
+        worker=myid(),
+    )
+end
+
+function _apply_search_result!(montages, config::ParameterSearchConfig, result)
+    for time_ms in config.times_ms
+        rgb = get(result.images, time_ms, nothing)
+        if rgb === nothing
+            @warn "Missing requested snapshot." A=result.amplitude T=result.period time_ms=time_ms
+            continue
+        end
+        top, left = _cell_origin(config, result.a_idx, result.t_idx)
+        _paste_rgb!(montages[time_ms], rgb, top, left)
+    end
+
+    return montages
+end
+
+function _append_search_summary(summary_path::AbstractString, result)
+    open(summary_path, "a") do io
+        println(
+            io,
+            join((
+                result.index,
+                result.total,
+                result.amplitude,
+                result.period,
+                result.seed === nothing ? "" : result.seed,
+                result.compute_seconds,
+                result.elapsed_seconds,
+            ), ","),
+        )
+    end
+end
+
+function _print_search_progress(config::ParameterSearchConfig, result, completed::Integer, total::Integer, search_start)
+    total_elapsed = (time_ns() - search_start) / 1e9
+    eta = completed == 0 ? 0.0 : (total_elapsed / completed) * (total - completed)
+    worker_text = result.worker == 1 ? "" : string(" worker=", result.worker)
+    println(
+        "[", completed, "/", total, "] ",
+        "A=", _compact_number(result.amplitude),
+        " T=", _compact_number(result.period), " ms ",
+        "seed=", result.seed === nothing ? "random" : result.seed,
+        worker_text,
+        " compute=", round(result.compute_seconds; digits=3), "s ",
+        "elapsed=", round(result.elapsed_seconds; digits=3), "s ",
+        "eta=", _format_duration(eta),
+    )
+    flush(stdout)
+    return nothing
+end
+
+function _run_parameter_search_serial!(montages, summary_path::AbstractString, config::ParameterSearchConfig, jobs, interval_ms::Integer, max_time_ms::Integer, search_start)
+    total = length(jobs)
+    for (completed, job) in enumerate(jobs)
+        result = _run_parameter_search_job(job, config, interval_ms, max_time_ms)
+        _apply_search_result!(montages, config, result)
+        _append_search_summary(summary_path, result)
+        _print_search_progress(config, result, completed, total, search_start)
+    end
+
+    return nothing
+end
+
+function _worker_project_flags()
+    project = Base.active_project()
+    project === nothing && return `--project=@.`
+    return `--project=$(project)`
+end
+
+function _search_worker_ids()
+    return filter(!=(myid()), procs())
+end
+
+function _ensure_search_workers!(target_workers::Integer)
+    active = _search_worker_ids()
+    added = Int[]
+
+    if length(active) < target_workers
+        added = addprocs(target_workers - length(active); exeflags=_worker_project_flags())
+    end
+
+    worker_ids = _search_worker_ids()[1:target_workers]
+    for pid in worker_ids
+        remotecall_fetch(Core.eval, pid, Main, :(using RSEModel))
+    end
+
+    return worker_ids, added
+end
+
+function _run_parameter_search_job_with_channel(args)
+    job, config, interval_ms, max_time_ms, result_channel = args
+    result = _run_parameter_search_job(job, config, interval_ms, max_time_ms)
+    put!(result_channel, result)
+    return nothing
+end
+
+function _run_parameter_search_parallel!(montages, summary_path::AbstractString, config::ParameterSearchConfig, jobs, interval_ms::Integer, max_time_ms::Integer, search_start)
+    target_workers = min(config.workers, length(jobs))
+    worker_ids, added_workers = _ensure_search_workers!(target_workers)
+    println("Parallel CPU workers: ", target_workers)
+    flush(stdout)
+
+    completed = 0
+    result_channel = RemoteChannel(() -> Channel{Any}(min(length(jobs), target_workers * 2)))
+    work_items = [(job, config, interval_ms, max_time_ms, result_channel) for job in jobs]
+    worker_pool = CachingPool(worker_ids)
+    scheduler_task = @async pmap(_run_parameter_search_job_with_channel, worker_pool, work_items; batch_size=1)
+
+    try
+        while completed < length(jobs)
+            if !isready(result_channel)
+                if istaskdone(scheduler_task)
+                    wait(scheduler_task)
+                end
+                sleep(0.05)
+                continue
+            end
+
+            result = take!(result_channel)
+            completed += 1
+            _apply_search_result!(montages, config, result)
+            _append_search_summary(summary_path, result)
+            _print_search_progress(config, result, completed, length(jobs), search_start)
+        end
+
+        wait(scheduler_task)
+    finally
+        isempty(added_workers) || rmprocs(added_workers)
+    end
+
+    return nothing
+end
+
 function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfig())
     config = _validate_search_config(config)
     total = length(config.A_values) * length(config.period_values)
@@ -286,6 +516,8 @@ function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfi
         " backend=", config.backend,
         " conv=", config.convolution,
         " boundary=periodic",
+        " duty=", _duty_text(config),
+        " workers=", config.workers,
         " snapshots=", join(string.(config.times_ms), ","),
         " ms",
     )
@@ -306,76 +538,12 @@ function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfi
     end
 
     search_start = time_ns()
-    sim_index = 0
-    params = ModelParams()
+    jobs = _search_jobs(config)
 
-    for (a_idx, amplitude) in enumerate(config.A_values)
-        for (t_idx, period) in enumerate(config.period_values)
-            sim_index += 1
-            seed = _seed_for_sim(config, sim_index)
-            sim_start = time_ns()
-            data = run_simulation(
-                N=config.N,
-                A=amplitude,
-                T=period,
-                Se=config.Se,
-                Si=config.Si,
-                start_time=minimum(config.times_ms),
-                end_time=max_time_ms,
-                seed=seed,
-                plot=false,
-                gif=false,
-                interval=interval_ms,
-                p=params,
-                fps=50,
-                fft_flags=config.fft_flags,
-                backend=config.backend,
-                gpu_threads=config.gpu_threads,
-                convolution=config.convolution,
-                kernel_cutoff=config.kernel_cutoff,
-                boundary=:periodic,
-            )
-            elapsed = (time_ns() - sim_start) / 1e9
-            snapshots = Dict(round(Int, snapshot.t) => snapshot for snapshot in data.images)
-
-            for time_ms in config.times_ms
-                snapshot = get(snapshots, time_ms, nothing)
-                if snapshot === nothing
-                    @warn "Missing requested snapshot." A=amplitude T=period time_ms=time_ms
-                    continue
-                end
-                rgb = _search_cell_rgb(snapshot, config.view, config.cmap)
-                top, left = _cell_origin(config, a_idx, t_idx)
-                _paste_rgb!(montages[time_ms], rgb, top, left)
-            end
-
-            total_elapsed = (time_ns() - search_start) / 1e9
-            eta = sim_index == 0 ? 0.0 : (total_elapsed / sim_index) * (total - sim_index)
-            println(
-                "[", sim_index, "/", total, "] ",
-                "A=", _compact_number(amplitude),
-                " T=", _compact_number(period), " ms ",
-                "seed=", seed === nothing ? "random" : seed,
-                " compute=", round(data.compute_seconds; digits=3), "s ",
-                "elapsed=", round(elapsed; digits=3), "s ",
-                "eta=", _format_duration(eta),
-            )
-            flush(stdout)
-            open(summary_path, "a") do io
-                println(
-                    io,
-                    join((
-                        sim_index,
-                        total,
-                        amplitude,
-                        period,
-                        seed === nothing ? "" : seed,
-                        data.compute_seconds,
-                        elapsed,
-                    ), ","),
-                )
-            end
-        end
+    if config.backend == :cpu && config.workers > 1
+        _run_parameter_search_parallel!(montages, summary_path, config, jobs, interval_ms, max_time_ms, search_start)
+    else
+        _run_parameter_search_serial!(montages, summary_path, config, jobs, interval_ms, max_time_ms, search_start)
     end
 
     for time_ms in config.times_ms
@@ -440,6 +608,11 @@ function _search_parser()
             arg_type = Float64
             default = 3.0
             dest_name = "kernel_cutoff"
+        "--duty-cycle"
+            help = "Stimulus duty cycle percentage. Defaults to 50."
+            arg_type = Float64
+            default = 50.0
+            dest_name = "duty_cycle_percent"
         "--view"
             help = "Montage view: retinal or cortical."
             arg_type = String
@@ -475,6 +648,10 @@ function _search_parser()
             arg_type = Int
             default = 256
             dest_name = "gpu_threads"
+        "--workers"
+            help = "CPU worker processes for parallel parameter sweeps. Metal runs serially."
+            arg_type = Int
+            default = 1
         "--dry-run"
             help = "Print the planned search without running simulations."
             action = :store_true
@@ -497,6 +674,7 @@ function parameter_search_main(argv=ARGS)
         backend=backend,
         convolution=Symbol(lowercase(args["conv"])),
         kernel_cutoff=args["kernel_cutoff"],
+        duty_cycle_percent=args["duty_cycle_percent"],
         seed=args["seed"],
         seed_mode=Symbol(lowercase(args["seed_mode"])),
         view=Symbol(lowercase(args["view"])),
@@ -505,6 +683,7 @@ function parameter_search_main(argv=ARGS)
         overwrite=args["overwrite"],
         fftw_threads=args["fftw_threads"],
         gpu_threads=args["gpu_threads"],
+        workers=args["workers"],
         dry_run=args["dry_run"],
     )
     run_parameter_search(config)
