@@ -60,11 +60,11 @@ function _validate_backend(value)
     throw(ArgumentError("--backend must be cpu or metal"))
 end
 
-function _validate_convolution(value, backend)
+function _validate_convolution(value, backend, boundary_x::Symbol=:periodic, boundary_y::Symbol=:periodic)
     key = lowercase(value)
     key in ("auto", "fft", "separable") || throw(ArgumentError("--conv must be auto, fft, or separable"))
     if key == "auto"
-        return backend == "metal" ? :separable : :fft
+        return _default_convolution(Symbol(backend), boundary_x, boundary_y)
     elseif key == "separable" && backend != "metal"
         throw(ArgumentError("--conv separable is currently implemented for the Metal backend only"))
     else
@@ -111,7 +111,7 @@ function _build_parser()
             help = "Shortcut for --backend metal."
             action = :store_true
         "--conv"
-            help = "Convolution backend: auto, fft, or separable. Auto uses separable on Metal."
+            help = "Convolution backend: auto, fft, or separable. Auto uses FFT for periodic CPU/Metal runs."
             arg_type = String
             default = "auto"
         "--kernel-cutoff"
@@ -294,10 +294,10 @@ function main(argv=ARGS)
     end
     args["images"] = _validate_images(args["images"])
     args["backend"] = args["gpu"] ? "metal" : _validate_backend(args["backend"])
-    convolution = _validate_convolution(args["conv"], args["backend"])
     boundary_base = args["boundary"] === nothing ? :periodic : _validate_boundary_cli(args["boundary"])
     boundary_x = args["boundary_x"] === nothing ? boundary_base : _validate_boundary_cli(args["boundary_x"])
     boundary_y = args["boundary_y"] === nothing ? boundary_base : _validate_boundary_cli(args["boundary_y"])
+    convolution = _validate_convolution(args["conv"], args["backend"], boundary_x, boundary_y)
 
     if args["interval"] <= 0
         throw(ArgumentError("--interval must be positive"))

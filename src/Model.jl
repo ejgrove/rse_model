@@ -65,6 +65,12 @@ function _validate_boundaries(boundary_x::Symbol, boundary_y::Symbol, convolutio
     return boundary_x, boundary_y
 end
 
+function _default_convolution(backend::Symbol, boundary_x::Symbol=:periodic, boundary_y::Symbol=:periodic)
+    backend = backend == :gpu ? :metal : backend
+    backend in (:cpu, :metal) || throw(ArgumentError("backend must be :cpu or :metal."))
+    return backend == :metal && (boundary_x != :periodic || boundary_y != :periodic) ? :separable : :fft
+end
+
 struct FFTConvolver{T,P,Q}
     forward_plan::P
     inverse_plan::Q

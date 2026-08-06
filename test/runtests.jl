@@ -1,4 +1,5 @@
 using Test
+using FFTW
 using HTTP
 using Metal
 using RSEModel
@@ -157,6 +158,25 @@ end
     end
 end
 
+@testset "metal fft convolution matches cpu fft" begin
+    if Metal.functional()
+        N = 17
+        U = reshape(Float32.(1:(N * N)), N, N) ./ Float32(N * N)
+        K = generate_gaussian_kernel(2.0, N; dtype=Float32)
+        cpu_out = similar(U)
+        RSEModel.fft_convolution!(cpu_out, RSEModel.FFTConvolver(K, U; flags=FFTW.ESTIMATE), U)
+
+        gpu_U = Metal.MtlArray(U)
+        gpu_out = similar(gpu_U)
+        RSEModel.fft_convolution!(gpu_out, RSEModel.MetalFFTConvolver(K, gpu_U), gpu_U)
+        Metal.synchronize()
+
+        @test Array(gpu_out) ≈ cpu_out rtol=1e-5 atol=1e-5
+    else
+        @test_skip "Metal.jl is not functional on this machine."
+    end
+end
+
 @testset "retinal transform" begin
     img = reshape(collect(Float32, 1:25), 5, 5)
     ret = retinal_transform(img)
@@ -192,6 +212,13 @@ end
 end
 
 @testset "live applet config" begin
+    periodic_config = live_config_from_query(Dict(
+        "backend" => "metal",
+        "conv" => "auto",
+    ))
+    @test periodic_config.backend == :metal
+    @test periodic_config.convolution == :fft
+
     config = live_config_from_query(Dict(
         "backend" => "gpu",
         "conv" => "auto",

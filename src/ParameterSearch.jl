@@ -133,7 +133,7 @@ function _validate_search_config(config::ParameterSearchConfig)
     config.seed_mode in (:same, :increment) || throw(ArgumentError("seed_mode must be :same or :increment."))
 
     convolution = if config.convolution == :auto
-        config.backend == :metal ? :separable : :fft
+        _default_convolution(config.backend)
     else
         config.convolution
     end
@@ -724,7 +724,7 @@ function _search_parser()
             help = "Shortcut for --backend metal."
             action = :store_true
         "--conv"
-            help = "Convolution backend: auto, fft, or separable. Auto uses separable on Metal and FFT on CPU."
+            help = "Convolution backend: auto, fft, or separable. Auto uses FFT for periodic CPU/Metal runs."
             arg_type = String
             default = "auto"
         "--kernel-cutoff"

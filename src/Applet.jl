@@ -46,16 +46,16 @@ end
 function normalize_live_config(config::LiveConfig)
     backend = config.backend == :gpu ? :metal : config.backend
     backend in (:cpu, :metal) || throw(ArgumentError("backend must be :cpu or :metal."))
+    boundary_x, boundary_y = _resolve_boundaries(config.boundary, config.boundary_x, config.boundary_y)
 
     convolution = if config.convolution == :auto
-        backend == :metal ? :separable : :fft
+        _default_convolution(backend, boundary_x, boundary_y)
     else
         config.convolution
     end
     convolution in (:fft, :separable) || throw(ArgumentError("convolution must be :auto, :fft, or :separable."))
     backend == :metal || convolution == :fft ||
         throw(ArgumentError("The CPU live backend currently supports FFT convolution only."))
-    boundary_x, boundary_y = _resolve_boundaries(config.boundary, config.boundary_x, config.boundary_y)
     _validate_boundaries(boundary_x, boundary_y, convolution, backend)
     coupling = config.coupling
     coupling in (:none, :midline) || throw(ArgumentError("coupling must be :none or :midline."))

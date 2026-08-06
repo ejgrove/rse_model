@@ -26,7 +26,7 @@ function _convolution(value, backend)
     key = lowercase(value)
     key in ("auto", "fft", "separable") || throw(ArgumentError("--conv must be auto, fft, or separable"))
     if key == "auto"
-        return backend == "metal" ? :separable : :fft
+        return RSEModel._default_convolution(Symbol(backend))
     elseif key == "separable" && backend != "metal"
         throw(ArgumentError("--conv separable is currently implemented for the Metal backend only"))
     else
@@ -58,7 +58,7 @@ function _settings()
             help = "Shortcut for --backend metal."
             action = :store_true
         "--conv"
-            help = "Convolution backend: auto, fft, or separable. Auto uses separable on Metal."
+            help = "Convolution backend: auto, fft, or separable. Auto uses FFT for periodic CPU/Metal runs."
             arg_type = String
             default = "auto"
         "--kernel-cutoff"
