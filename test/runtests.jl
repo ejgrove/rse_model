@@ -30,6 +30,14 @@ end
     @test ModelParams{Float32}().dt isa Float32
 end
 
+@testset "stimulus duty cycle" begin
+    default_duty = duty_cycle_percent_from_threshold(ModelParams{Float32}().V)
+    @test 20 < default_duty < 21
+    @test stimulus_threshold_from_duty_cycle_percent(default_duty) ≈ ModelParams{Float32}().V atol=1e-6
+    @test RSEModel.strobe_stimulus(0.0f0, 0.7f0, 115.0f0, ModelParams{Float32}(), 50.0f0) == 0.0f0
+    @test RSEModel.strobe_stimulus(30.0f0, 0.7f0, 115.0f0, ModelParams{Float32}(), 50.0f0) == 0.7f0
+end
+
 @testset "short simulation" begin
     data = run_simulation(
         N=25,
@@ -81,6 +89,32 @@ end
     end
 end
 
+@testset "paired metal separable convolution" begin
+    if Metal.functional()
+        Ue = Metal.rand(Float32, 25, 25)
+        Ui = Metal.rand(Float32, 25, 25)
+        out_e_separate = similar(Ue)
+        out_i_separate = similar(Ui)
+        out_e_pair = similar(Ue)
+        out_i_pair = similar(Ui)
+
+        ce_separate = RSEModel.MetalSeparableConvolver(2.0, Ue; cutoff=3.0)
+        ci_separate = RSEModel.MetalSeparableConvolver(5.0, Ui; cutoff=3.0)
+        ce_pair = RSEModel.MetalSeparableConvolver(2.0, Ue; cutoff=3.0)
+        ci_pair = RSEModel.MetalSeparableConvolver(5.0, Ui; cutoff=3.0)
+
+        RSEModel.separable_convolution!(out_e_separate, ce_separate, Ue; gpu_threads=128)
+        RSEModel.separable_convolution!(out_i_separate, ci_separate, Ui; gpu_threads=128)
+        RSEModel.separable_convolution_pair!(out_e_pair, out_i_pair, ce_pair, ci_pair, Ue, Ui; gpu_threads=128)
+        Metal.synchronize()
+
+        @test Array(out_e_pair) ≈ Array(out_e_separate) rtol=1e-6 atol=1e-6
+        @test Array(out_i_pair) ≈ Array(out_i_separate) rtol=1e-6 atol=1e-6
+    else
+        @test_skip "Metal.jl is not functional on this machine."
+    end
+end
+
 @testset "retinal transform" begin
     img = reshape(collect(Float32, 1:25), 5, 5)
     ret = retinal_transform(img)
@@ -96,6 +130,7 @@ end
         "fps" => "20",
         "speed" => "0",
         "seed" => "42",
+        "duty_cycle" => "25",
     ))
     @test config.backend == :metal
     @test config.convolution == :separable
@@ -103,6 +138,7 @@ end
     @test config.target_fps == 20
     @test config.speed == 0
     @test config.seed == 42
+    @test config.duty_cycle_percent == 25.0f0
 end
 
 @testset "live applet server" begin

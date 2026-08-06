@@ -11,9 +11,26 @@ function step_function(x)
     return max(sign(x), zero(x))
 end
 
-function strobe_stimulus(t, A, period, p::ModelParams)
+function duty_cycle_percent_from_threshold(threshold)
+    v = clamp(Float64(threshold), -1.0, 1.0)
+    return 100.0 * (0.5 - asin(v) / pi)
+end
+
+function stimulus_threshold_from_duty_cycle_percent(duty_cycle_percent)
+    duty = Float64(duty_cycle_percent)
+    0 <= duty <= 100 || throw(ArgumentError("duty cycle percent must be between 0 and 100."))
+    return sin(pi * (0.5 - duty / 100))
+end
+
+function _stimulus_threshold(p::ModelParams, duty_cycle_percent)
+    duty_cycle_percent === nothing && return p.V
+    return stimulus_threshold_from_duty_cycle_percent(duty_cycle_percent)
+end
+
+function strobe_stimulus(t, A, period, p::ModelParams, duty_cycle_percent=nothing)
     T = promote_type(typeof(t), typeof(A), typeof(period), typeof(p.V))
-    return T(A) * step_function(sin((T(2) * T(pi) * T(t)) / T(period)) - T(p.V))
+    threshold = T(_stimulus_threshold(p, duty_cycle_percent))
+    return T(A) * step_function(sin((T(2) * T(pi) * T(t)) / T(period)) - threshold)
 end
 
 struct FFTConvolver{T,P,Q}
@@ -107,13 +124,14 @@ function _step!(
     period,
     t,
     p,
+    duty_cycle_percent=nothing,
 )
     fft_convolution!(Uec, excitatory_convolver, Ue)
     fft_convolution!(Uic, inhibitory_convolver, Ui)
 
     noise_E = @view noise[1, :, :]
     noise_I = @view noise[2, :, :]
-    stim = strobe_stimulus(t, A, period, p)
+    stim = strobe_stimulus(t, A, period, p, duty_cycle_percent)
 
     @. Ue += (p.dt / p.Te) * (-Ue + firing_rate(p.Aee * Uec - p.Aie * Uic - p.He + p.Ge * stim + p.Ne * noise_E))
     @. Ui += (p.dt / p.Ti) * (-Ui + firing_rate(p.Aei * Uec - p.Aii * Uic - p.Hi + p.Gi * stim + p.Ni * noise_I))
@@ -203,6 +221,88 @@ function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, 
     return
 end
 
+function _metal_conv_cols_pair_kernel!(
+    out_e,
+    out_i,
+    input_e,
+    input_i,
+    kernel_e,
+    kernel_i,
+    radius_e,
+    radius_i,
+    rows,
+    cols,
+    klen_e,
+    klen_i,
+    n,
+)
+    i = thread_position_in_grid().x
+    if i <= n
+        row0 = (i - 1) % rows
+        col0 = (i - 1) ÷ rows
+
+        acc_e = 0.0f0
+        for k in 1:klen_e
+            offset = Int32(k) - Int32(radius_e) - Int32(1)
+            source_col0 = mod(Int32(col0) + offset, Int32(cols))
+            source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+            acc_e += input_e[source_idx] * kernel_e[k]
+        end
+        out_e[i] = acc_e
+
+        acc_i = 0.0f0
+        for k in 1:klen_i
+            offset = Int32(k) - Int32(radius_i) - Int32(1)
+            source_col0 = mod(Int32(col0) + offset, Int32(cols))
+            source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+            acc_i += input_i[source_idx] * kernel_i[k]
+        end
+        out_i[i] = acc_i
+    end
+    return
+end
+
+function _metal_conv_rows_pair_kernel!(
+    out_e,
+    out_i,
+    input_e,
+    input_i,
+    kernel_e,
+    kernel_i,
+    radius_e,
+    radius_i,
+    rows,
+    cols,
+    klen_e,
+    klen_i,
+    n,
+)
+    i = thread_position_in_grid().x
+    if i <= n
+        row0 = (i - 1) % rows
+        col0 = (i - 1) ÷ rows
+
+        acc_e = 0.0f0
+        for k in 1:klen_e
+            offset = Int32(k) - Int32(radius_e) - Int32(1)
+            source_row0 = mod(Int32(row0) + offset, Int32(rows))
+            source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+            acc_e += input_e[source_idx] * kernel_e[k]
+        end
+        out_e[i] = acc_e
+
+        acc_i = 0.0f0
+        for k in 1:klen_i
+            offset = Int32(k) - Int32(radius_i) - Int32(1)
+            source_row0 = mod(Int32(row0) + offset, Int32(rows))
+            source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+            acc_i += input_i[source_idx] * kernel_i[k]
+        end
+        out_i[i] = acc_i
+    end
+    return
+end
+
 function separable_convolution!(
     out,
     convolver::MetalSeparableConvolver,
@@ -240,6 +340,60 @@ function separable_convolution!(
     )
 
     return out
+end
+
+function separable_convolution_pair!(
+    out_e,
+    out_i,
+    convolver_e::MetalSeparableConvolver,
+    convolver_i::MetalSeparableConvolver,
+    Ue,
+    Ui;
+    gpu_threads::Integer=256,
+)
+    rows_u, cols_u = size(Ue)
+    rows = UInt32(rows_u)
+    cols = UInt32(cols_u)
+    n = UInt32(length(Ue))
+    klen_e = UInt32(length(convolver_e.kernel))
+    klen_i = UInt32(length(convolver_i.kernel))
+    radius_e = UInt32(convolver_e.radius)
+    radius_i = UInt32(convolver_i.radius)
+    threads = min(gpu_threads, length(Ue))
+    groups = cld(length(Ue), threads)
+
+    @metal threads=threads groups=groups _metal_conv_cols_pair_kernel!(
+        convolver_e.scratch,
+        convolver_i.scratch,
+        Ue,
+        Ui,
+        convolver_e.kernel,
+        convolver_i.kernel,
+        radius_e,
+        radius_i,
+        rows,
+        cols,
+        klen_e,
+        klen_i,
+        n,
+    )
+    @metal threads=threads groups=groups _metal_conv_rows_pair_kernel!(
+        out_e,
+        out_i,
+        convolver_e.scratch,
+        convolver_i.scratch,
+        convolver_e.kernel,
+        convolver_i.kernel,
+        radius_e,
+        radius_i,
+        rows,
+        cols,
+        klen_e,
+        klen_i,
+        n,
+    )
+
+    return out_e, out_i
 end
 
 function _metal_euler_kernel!(
@@ -290,11 +444,12 @@ function _metal_step!(
     t::Float32,
     p::ModelParams{Float32},
     gpu_threads::Integer,
+    duty_cycle_percent=nothing,
 )
     fft_convolution!(Uec, excitatory_convolver, Ue)
     fft_convolution!(Uic, inhibitory_convolver, Ui)
 
-    stim = strobe_stimulus(t, A, period, p)
+    stim = strobe_stimulus(t, A, period, p, duty_cycle_percent)
     n = UInt32(length(Ue))
     threads = min(gpu_threads, length(Ue))
     groups = cld(length(Ue), threads)
@@ -338,11 +493,19 @@ function _metal_step_separable!(
     t::Float32,
     p::ModelParams{Float32},
     gpu_threads::Integer,
+    duty_cycle_percent=nothing,
 )
-    separable_convolution!(Uec, excitatory_convolver, Ue; gpu_threads=gpu_threads)
-    separable_convolution!(Uic, inhibitory_convolver, Ui; gpu_threads=gpu_threads)
+    separable_convolution_pair!(
+        Uec,
+        Uic,
+        excitatory_convolver,
+        inhibitory_convolver,
+        Ue,
+        Ui;
+        gpu_threads=gpu_threads,
+    )
 
-    stim = strobe_stimulus(t, A, period, p)
+    stim = strobe_stimulus(t, A, period, p, duty_cycle_percent)
     n = UInt32(length(Ue))
     threads = min(gpu_threads, length(Ue))
     groups = cld(length(Ue), threads)
@@ -403,7 +566,8 @@ function run_simulation_gpu(;
     dtype::Type{F}=Float32,
     gpu_threads::Integer=256,
     convolution::Symbol=:separable,
-    kernel_cutoff::Real=2.0,
+    kernel_cutoff::Real=3.0,
+    duty_cycle_percent=nothing,
 ) where {F<:AbstractFloat}
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     dtype === Float32 || throw(ArgumentError("The Metal backend currently supports Float32 only."))
@@ -471,6 +635,7 @@ function run_simulation_gpu(;
                 t,
                 pT,
                 gpu_threads,
+                duty_cycle_percent,
             )
         else
             _metal_step_separable!(
@@ -487,6 +652,7 @@ function run_simulation_gpu(;
                 t,
                 pT,
                 gpu_threads,
+                duty_cycle_percent,
             )
         end
 
@@ -495,7 +661,7 @@ function run_simulation_gpu(;
             push!(pointE, Ue[point_index, point_index])
             push!(pointI, Ui[point_index, point_index])
             push!(time, Float64(t))
-            stim = strobe_stimulus(t, Float32(A), Float32(T), pT)
+            stim = strobe_stimulus(t, Float32(A), Float32(T), pT, duty_cycle_percent)
             push!(StimE, pT.Ge * stim)
             push!(StimI, pT.Gi * stim)
         end
@@ -533,7 +699,8 @@ function run_simulation(;
     backend::Symbol=:cpu,
     gpu_threads::Integer=256,
     convolution::Symbol=:fft,
-    kernel_cutoff::Real=2.0,
+    kernel_cutoff::Real=3.0,
+    duty_cycle_percent=nothing,
 ) where {F<:AbstractFloat}
     if backend in (:metal, :gpu)
         return run_simulation_gpu(
@@ -554,6 +721,7 @@ function run_simulation(;
             gpu_threads=gpu_threads,
             convolution=convolution,
             kernel_cutoff=kernel_cutoff,
+            duty_cycle_percent=duty_cycle_percent,
         )
     elseif backend != :cpu
         throw(ArgumentError("backend must be :cpu or :metal"))
@@ -591,13 +759,26 @@ function run_simulation(;
     for step_idx in 0:steps
         t = dtype(step_idx) * pT.dt
         randn!(rng, noise)
-        _step!(Ue, Ui, Uec, Uic, excitatory_convolver, inhibitory_convolver, noise, dtype(A), dtype(T), t, pT)
+        _step!(
+            Ue,
+            Ui,
+            Uec,
+            Uic,
+            excitatory_convolver,
+            inhibitory_convolver,
+            noise,
+            dtype(A),
+            dtype(T),
+            t,
+            pT,
+            duty_cycle_percent,
+        )
 
         if plot
             push!(pointE, Ue[point_index, point_index])
             push!(pointI, Ui[point_index, point_index])
             push!(time, Float64(t))
-            stim = strobe_stimulus(t, dtype(A), dtype(T), pT)
+            stim = strobe_stimulus(t, dtype(A), dtype(T), pT, duty_cycle_percent)
             push!(StimE, pT.Ge * stim)
             push!(StimI, pT.Gi * stim)
         end

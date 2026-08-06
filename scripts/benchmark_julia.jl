@@ -64,7 +64,7 @@ function _settings()
         "--kernel-cutoff"
             help = "Gaussian cutoff in sigma units for Metal separable convolution."
             arg_type = Float64
-            default = 2.0
+            default = 3.0
             dest_name = "kernel_cutoff"
         "--fft-plan"
             help = "FFTW planning mode: estimate, measure, or patient."

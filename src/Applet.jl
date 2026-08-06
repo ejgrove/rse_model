@@ -8,13 +8,14 @@ Base.@kwdef struct LiveConfig
     convolution::Symbol = :auto
     A::Float32 = 0.7f0
     period::Float32 = 115.0f0
+    duty_cycle_percent::Union{Nothing,Float32} = Float32(duty_cycle_percent_from_threshold(ModelParams{Float32}().V))
     Se::Float32 = 2.0f0
     Si::Float32 = 5.0f0
     seed::Union{Nothing,Int} = nothing
     target_fps::Int = 30
     speed::Float64 = 1.0
     gpu_threads::Int = 256
-    kernel_cutoff::Float64 = 2.0
+    kernel_cutoff::Float64 = 3.0
     max_frames::Int = 0
 end
 
@@ -51,6 +52,10 @@ function normalize_live_config(config::LiveConfig)
     config.gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
     config.kernel_cutoff > 0 || throw(ArgumentError("kernel_cutoff must be positive."))
     config.max_frames >= 0 || throw(ArgumentError("max_frames must be non-negative."))
+    if config.duty_cycle_percent !== nothing
+        0 <= config.duty_cycle_percent <= 100 ||
+            throw(ArgumentError("duty_cycle_percent must be between 0 and 100."))
+    end
 
     return LiveConfig(
         N=N,
@@ -59,6 +64,7 @@ function normalize_live_config(config::LiveConfig)
         convolution=convolution,
         A=config.A,
         period=config.period,
+        duty_cycle_percent=config.duty_cycle_percent,
         Se=config.Se,
         Si=config.Si,
         seed=config.seed,
@@ -98,6 +104,12 @@ function _parse_float32(params, key, default)
     return Float32(_parse_float(params, key, Float64(default)))
 end
 
+function _parse_optional_float32(params, key)
+    value = _get(params, key, "")
+    isempty(value) && return nothing
+    return Float32(parse(Float64, value))
+end
+
 function _parse_symbol(params, key, default)
     value = _get(params, key, nothing)
     value === nothing && return default
@@ -115,13 +127,14 @@ function live_config_from_query(params::AbstractDict{String,String})
         convolution=_parse_symbol(params, "conv", :auto),
         A=_parse_float32(params, "A", 0.7f0),
         period=_parse_float32(params, "T", 115.0f0),
+        duty_cycle_percent=_parse_optional_float32(params, "duty_cycle"),
         Se=_parse_float32(params, "Se", 2.0f0),
         Si=_parse_float32(params, "Si", 5.0f0),
         seed=seed,
         target_fps=_parse_int(params, "fps", 30),
         speed=_parse_float(params, "speed", 1.0),
         gpu_threads=_parse_int(params, "gpu_threads", 256),
-        kernel_cutoff=_parse_float(params, "kernel_cutoff", 2.0),
+        kernel_cutoff=_parse_float(params, "kernel_cutoff", 3.0),
         max_frames=_parse_int(params, "max_frames", 0),
     ))
 end
@@ -222,6 +235,7 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig)
                 config.period,
                 t_step,
                 p,
+                config.duty_cycle_percent,
             )
             step_idx += 1
         end
@@ -290,6 +304,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig)
                     t_step,
                     p,
                     config.gpu_threads,
+                    config.duty_cycle_percent,
                 )
             else
                 _metal_step_separable!(
@@ -306,6 +321,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig)
                     t_step,
                     p,
                     config.gpu_threads,
+                    config.duty_cycle_percent,
                 )
             end
             step_idx += 1
@@ -346,6 +362,7 @@ function _json_string(value)
 end
 
 function _json_number(value; digits=4)
+    value === nothing && return "null"
     if value isa AbstractFloat
         isfinite(value) || return "null"
         return string(round(value; digits=digits))
@@ -363,6 +380,7 @@ function _hello_json(config::LiveConfig)
         ",\"speed\":", _json_number(config.speed),
         ",\"A\":", _json_number(config.A),
         ",\"T\":", _json_number(config.period),
+        ",\"dutyCycle\":", _json_number(config.duty_cycle_percent),
         ",\"Se\":", _json_number(config.Se),
         ",\"Si\":", _json_number(config.Si),
         ",\"kernelCutoff\":", _json_number(config.kernel_cutoff),
@@ -409,15 +427,42 @@ function _safe_ws_send(ws, message)
 end
 
 function _stream_websocket(ws, params)
+    paused = Ref(false)
+    closed = Ref(false)
+    control_task = @async try
+        while !closed[]
+            message = String(HTTP.WebSockets.receive(ws))
+            if message == "pause"
+                paused[] = true
+            elseif message == "play"
+                paused[] = false
+            elseif message == "close"
+                closed[] = true
+                break
+            end
+        end
+    catch err
+        if !(err isa HTTP.WebSockets.WebSocketError || err isa EOFError || err isa IOError)
+            @warn "Applet control channel failed." exception=(err, catch_backtrace())
+        end
+        closed[] = true
+    end
+
     try
         config = live_config_from_query(params)
         _safe_ws_send(ws, _hello_json(config)) || return
         frames = stream_live_frames(config) do frame
+            while paused[] && !closed[]
+                sleep(0.03)
+            end
+            closed[] && return false
             _safe_ws_send(ws, _frame_json(frame))
         end
-        _safe_ws_send(ws, _done_json(frames))
+        closed[] || _safe_ws_send(ws, _done_json(frames))
     catch err
         _safe_ws_send(ws, _error_json(err))
+    finally
+        closed[] = true
     end
     return
 end
@@ -493,17 +538,17 @@ const APPLET_HTML = raw"""
   <title>RSE Real-Time Viewer</title>
   <style>
     :root {
-      --bg: #071013;
-      --panel: rgba(250, 244, 225, 0.08);
-      --panel-strong: rgba(250, 244, 225, 0.14);
-      --ink: #f7f0d3;
-      --muted: #adbea9;
-      --accent: #ffb84d;
-      --accent-2: #5ee6b5;
-      --danger: #ff6d6d;
-      --line: rgba(247, 240, 211, 0.16);
-      --shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
-      font-family: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
+      --bg: #f4f8fb;
+      --panel: rgba(255, 255, 255, 0.86);
+      --panel-strong: #ffffff;
+      --ink: #0d2638;
+      --muted: #607284;
+      --accent: #009eaa;
+      --accent-2: #f3b33d;
+      --danger: #db4d54;
+      --line: #dbe7ef;
+      --shadow: 0 24px 70px rgba(25, 56, 82, 0.14);
+      font-family: "IBM Plex Sans", "Aptos", "Helvetica Neue", sans-serif;
     }
 
     * { box-sizing: border-box; }
@@ -512,9 +557,12 @@ const APPLET_HTML = raw"""
       color: var(--ink);
       min-height: 100vh;
       background:
-        radial-gradient(circle at 15% 10%, rgba(94, 230, 181, 0.16), transparent 28rem),
-        radial-gradient(circle at 90% 15%, rgba(255, 184, 77, 0.16), transparent 30rem),
-        linear-gradient(135deg, #071013 0%, #122524 52%, #211b12 100%);
+        linear-gradient(rgba(13, 38, 56, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(13, 38, 56, 0.035) 1px, transparent 1px),
+        radial-gradient(circle at 8% 12%, rgba(0, 158, 170, 0.16), transparent 34rem),
+        radial-gradient(circle at 92% 8%, rgba(243, 179, 61, 0.18), transparent 28rem),
+        linear-gradient(135deg, #f8fbfd 0%, #eef6f8 48%, #f9f5e9 100%);
+      background-size: 30px 30px, 30px 30px, auto, auto, auto;
     }
 
     main {
@@ -531,6 +579,7 @@ const APPLET_HTML = raw"""
       font-size: clamp(28px, 4vw, 54px);
       letter-spacing: -0.06em;
       line-height: 0.95;
+      color: #092337;
     }
 
     h2 {
@@ -538,13 +587,13 @@ const APPLET_HTML = raw"""
       font-size: 13px;
       text-transform: uppercase;
       letter-spacing: 0.18em;
-      color: var(--muted);
+      color: var(--accent);
     }
 
     .panel, .stage {
       border: 1px solid var(--line);
       background: var(--panel);
-      backdrop-filter: blur(22px);
+      backdrop-filter: blur(20px);
       border-radius: 26px;
       box-shadow: var(--shadow);
     }
@@ -582,7 +631,7 @@ const APPLET_HTML = raw"""
       border: 1px solid var(--line);
       border-radius: 14px;
       color: var(--ink);
-      background: rgba(0, 0, 0, 0.22);
+      background: rgba(255, 255, 255, 0.74);
       padding: 10px 11px;
       font: inherit;
       outline: none;
@@ -610,24 +659,33 @@ const APPLET_HTML = raw"""
 
     button {
       cursor: pointer;
-      background: linear-gradient(135deg, var(--accent), #ff7e57);
-      color: #160f07;
+      background: linear-gradient(135deg, #0b3146, #006f7c);
+      color: white;
       border: 0;
       font-weight: 800;
       letter-spacing: 0.02em;
     }
 
     button.secondary {
-      color: var(--ink);
-      background: rgba(255, 255, 255, 0.08);
+      color: #0b3146;
+      background: #ffffff;
       border: 1px solid var(--line);
+    }
+
+    button.pause {
+      background: linear-gradient(135deg, var(--accent), #32c5b8);
+    }
+
+    button.paused {
+      background: linear-gradient(135deg, var(--accent-2), #ffcf70);
+      color: #2d2108;
     }
 
     .status {
       margin-top: 18px;
       padding: 12px;
       border-radius: 18px;
-      background: rgba(0, 0, 0, 0.2);
+      background: #f7fbfc;
       border: 1px solid var(--line);
       color: var(--muted);
       font-size: 13px;
@@ -649,7 +707,7 @@ const APPLET_HTML = raw"""
 
     .metric {
       border: 1px solid var(--line);
-      background: rgba(0, 0, 0, 0.22);
+      background: #ffffff;
       border-radius: 18px;
       padding: 12px;
       min-width: 0;
@@ -684,7 +742,7 @@ const APPLET_HTML = raw"""
     .view {
       border: 1px solid var(--line);
       border-radius: 24px;
-      background: rgba(0, 0, 0, 0.24);
+      background: #ffffff;
       padding: 14px;
       min-width: 0;
     }
@@ -711,11 +769,35 @@ const APPLET_HTML = raw"""
     canvas {
       display: block;
       width: 100%;
-      aspect-ratio: 1 / 1;
       border-radius: 18px;
       image-rendering: pixelated;
-      background: #060708;
-      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      background: #071018;
+      box-shadow: inset 0 0 0 1px rgba(13, 38, 56, 0.12);
+    }
+
+    .view canvas {
+      aspect-ratio: 1 / 1;
+    }
+
+    .kernel-card {
+      margin-top: 16px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: #ffffff;
+    }
+
+    .kernel-canvas {
+      aspect-ratio: 2.15 / 1;
+      background: #f8fbfd;
+      image-rendering: auto;
+    }
+
+    .tiny-note {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
     }
 
     .legend {
@@ -745,19 +827,25 @@ const APPLET_HTML = raw"""
         <label>Backend<select id="backend"><option value="metal">metal</option><option value="cpu">cpu</option></select></label>
         <label>Convolution<select id="conv"><option value="auto">auto</option><option value="separable">separable</option><option value="fft">fft</option></select></label>
         <label>Speed<select id="speed"><option value="1">1x real time</option><option value="0.5">0.5x</option><option value="2">2x</option><option value="0">max</option></select></label>
-        <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="2"></label>
+        <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
         <label>A<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
         <label>T (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
+        <label>Duty (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
         <label>Se<input id="se" type="number" min="0.1" step="0.1" value="2"></label>
         <label>Si<input id="si" type="number" min="0.1" step="0.1" value="5"></label>
       </div>
       <label class="check-row"><input id="fastN" type="checkbox" checked> Snap to FFT-friendly odd N</label>
       <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
-      <div class="button-row">
-        <button id="start">Start stream</button>
-        <button id="stop" class="secondary">Stop</button>
+      <div class="kernel-card">
+        <div class="view-head"><div class="view-title">Kernel window</div><div class="view-note" id="kernelInfo">-</div></div>
+        <canvas id="kernelGraph" class="kernel-canvas"></canvas>
+        <div class="tiny-note">Lines show the excitatory and inhibitory 1D Gaussian kernels. The applet uses the separable product of these kernels in x and y.</div>
       </div>
-      <div id="status" class="status">Idle. Start the stream when ready.</div>
+      <div class="button-row">
+        <button id="pausePlay" class="pause">Pause</button>
+        <button id="reset" class="secondary">Reset</button>
+      </div>
+      <div id="status" class="status">Streaming starts automatically. Use Pause or Reset while tuning parameters.</div>
     </section>
 
     <section class="stage">
@@ -797,12 +885,13 @@ const APPLET_HTML = raw"""
       kernelCutoff: document.getElementById("kernelCutoff"),
       amp: document.getElementById("amp"),
       period: document.getElementById("period"),
+      duty: document.getElementById("duty"),
       se: document.getElementById("se"),
       si: document.getElementById("si"),
       fastN: document.getElementById("fastN"),
       seed: document.getElementById("seed"),
-      start: document.getElementById("start"),
-      stop: document.getElementById("stop"),
+      pausePlay: document.getElementById("pausePlay"),
+      reset: document.getElementById("reset"),
       status: document.getElementById("status"),
       simTime: document.getElementById("simTime"),
       streamFps: document.getElementById("streamFps"),
@@ -811,10 +900,15 @@ const APPLET_HTML = raw"""
       gridN: document.getElementById("gridN"),
       range: document.getElementById("range"),
       cortical: document.getElementById("cortical"),
-      retinal: document.getElementById("retinal")
+      retinal: document.getElementById("retinal"),
+      kernelGraph: document.getElementById("kernelGraph"),
+      kernelInfo: document.getElementById("kernelInfo")
     };
 
     let socket = null;
+    let paused = false;
+    let resetting = false;
+    let streamToken = 0;
     let lastFrameAt = performance.now();
     let retinalMap = null;
     let retinalMapN = 0;
@@ -852,6 +946,108 @@ const APPLET_HTML = raw"""
         image.data[j + 3] = 255;
       }
       ctx.putImageData(image, 0, 0);
+    }
+
+    function setPauseUi(isPaused) {
+      paused = isPaused;
+      els.pausePlay.textContent = isPaused ? "Play" : "Pause";
+      els.pausePlay.classList.toggle("paused", isPaused);
+    }
+
+    function resetMetrics() {
+      els.simTime.textContent = "0 ms";
+      els.streamFps.textContent = "0";
+      els.msStep.textContent = "0";
+      els.rtx.textContent = "0";
+      els.gridN.textContent = "-";
+      els.range.textContent = "range -";
+    }
+
+    function gaussian1dValue(x, sigma) {
+      return Math.exp(-(x * x) / (sigma * sigma)) / (Math.sqrt(Math.PI) * sigma);
+    }
+
+    function kernelMass1d(sigma, radius) {
+      let sum = 0;
+      for (let x = -radius; x <= radius; x++) sum += gaussian1dValue(x, sigma);
+      return sum;
+    }
+
+    function drawKernelGraph() {
+      const canvas = els.kernelGraph;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(360, Math.round(rect.width * dpr));
+      const height = Math.max(160, Math.round(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      const n = Math.max(5, Number(els.n.value) || 101);
+      const se = Math.max(0.1, Number(els.se.value) || 2);
+      const si = Math.max(0.1, Number(els.si.value) || 5);
+      const cutoff = Math.max(0.5, Number(els.kernelCutoff.value) || 3);
+      const radiusE = Math.max(1, Math.ceil(cutoff * se));
+      const radiusI = Math.max(1, Math.ceil(cutoff * si));
+      const fullRadius = Math.max(radiusI, Math.floor(n / 2));
+      const retainedE = Math.pow(kernelMass1d(se, radiusE) / kernelMass1d(se, fullRadius), 2) * 100;
+      const retainedI = Math.pow(kernelMass1d(si, radiusI) / kernelMass1d(si, fullRadius), 2) * 100;
+      const maxRadius = Math.max(radiusE, radiusI, 4);
+      const samples = [];
+      let maxValue = 0;
+      for (let x = -maxRadius; x <= maxRadius; x++) {
+        const e = gaussian1dValue(x, se);
+        const i = gaussian1dValue(x, si);
+        samples.push({ x, e, i });
+        maxValue = Math.max(maxValue, e, i);
+      }
+
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#f8fbfd";
+      ctx.fillRect(0, 0, width, height);
+      const padL = 38 * dpr, padR = 18 * dpr, padT = 18 * dpr, padB = 30 * dpr;
+      const plotW = width - padL - padR;
+      const plotH = height - padT - padB;
+      const xToPx = (x) => padL + ((x + maxRadius) / (2 * maxRadius)) * plotW;
+      const yToPx = (v) => padT + (1 - v / maxValue) * plotH;
+
+      ctx.strokeStyle = "#dbe7ef";
+      ctx.lineWidth = 1 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(padL, padT + plotH);
+      ctx.lineTo(padL + plotW, padT + plotH);
+      ctx.moveTo(xToPx(0), padT);
+      ctx.lineTo(xToPx(0), padT + plotH);
+      ctx.stroke();
+
+      function drawLine(key, color) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5 * dpr;
+        ctx.beginPath();
+        samples.forEach((sample, idx) => {
+          const x = xToPx(sample.x);
+          const y = yToPx(sample[key]);
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      }
+
+      drawLine("i", "#f3b33d");
+      drawLine("e", "#009eaa");
+      ctx.fillStyle = "#607284";
+      ctx.font = `${11 * dpr}px IBM Plex Sans, sans-serif`;
+      ctx.fillText(`-r`, padL, height - 10 * dpr);
+      ctx.fillText(`0`, xToPx(0) - 3 * dpr, height - 10 * dpr);
+      ctx.fillText(`+r`, padL + plotW - 12 * dpr, height - 10 * dpr);
+      ctx.fillStyle = "#009eaa";
+      ctx.fillText("Se", padL + 8 * dpr, padT + 14 * dpr);
+      ctx.fillStyle = "#f3b33d";
+      ctx.fillText("Si", padL + 36 * dpr, padT + 14 * dpr);
+      els.kernelInfo.textContent =
+        `E r=${radiusE}, I r=${radiusI}; retained ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%`;
     }
 
     function wrapIndex(v, n) {
@@ -917,6 +1113,7 @@ const APPLET_HTML = raw"""
       params.set("kernel_cutoff", els.kernelCutoff.value);
       params.set("A", els.amp.value);
       params.set("T", els.period.value);
+      params.set("duty_cycle", els.duty.value);
       params.set("Se", els.se.value);
       params.set("Si", els.si.value);
       params.set("fast_n", els.fastN.checked ? "true" : "false");
@@ -926,21 +1123,26 @@ const APPLET_HTML = raw"""
 
     function startStream() {
       stopStream();
+      resetMetrics();
+      drawKernelGraph();
+      setPauseUi(false);
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const url = `${protocol}//${location.host}/stream?${streamParams().toString()}`;
       socket = new WebSocket(url);
+      const token = ++streamToken;
       els.status.textContent = "Connecting...";
       lastFrameAt = performance.now();
 
       socket.onopen = () => {
-        els.status.textContent = "Streaming. Close or press Stop to restart with new parameters.";
+        els.status.textContent = "Streaming. Use Pause to hold the current state or Reset to restart with new parameters.";
       };
 
       socket.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === "hello") {
           els.gridN.textContent = String(msg.N);
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} at target ${msg.fps} fps.`;
+          const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} at target ${msg.fps} fps, ${duty}.`;
           return;
         }
         if (msg.type === "done") {
@@ -969,7 +1171,11 @@ const APPLET_HTML = raw"""
       };
 
       socket.onclose = () => {
-        els.status.textContent = "Stopped.";
+        if (token !== streamToken) return;
+        if (!resetting) {
+          els.status.textContent = "Paused/disconnected. Press Play to start a stream.";
+          setPauseUi(true);
+        }
         socket = null;
       };
 
@@ -980,13 +1186,45 @@ const APPLET_HTML = raw"""
 
     function stopStream() {
       if (socket) {
+        try { socket.send("close"); } catch (_) {}
         socket.close();
         socket = null;
       }
     }
 
-    els.start.addEventListener("click", startStream);
-    els.stop.addEventListener("click", stopStream);
+    function resetStream() {
+      resetting = true;
+      stopStream();
+      resetMetrics();
+      setTimeout(() => {
+        resetting = false;
+        startStream();
+      }, 60);
+    }
+
+    function togglePausePlay() {
+      if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+        startStream();
+        return;
+      }
+      if (paused) {
+        socket.send("play");
+        setPauseUi(false);
+        els.status.textContent = "Streaming resumed.";
+      } else {
+        socket.send("pause");
+        setPauseUi(true);
+        els.status.textContent = "Paused. The simulation state is held on the Julia side.";
+      }
+    }
+
+    els.pausePlay.addEventListener("click", togglePausePlay);
+    els.reset.addEventListener("click", resetStream);
+    [
+      els.n, els.kernelCutoff, els.se, els.si
+    ].forEach((el) => el.addEventListener("input", drawKernelGraph));
+    window.addEventListener("resize", drawKernelGraph);
+    drawKernelGraph();
     startStream();
   </script>
 </body>

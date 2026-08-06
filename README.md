@@ -74,15 +74,17 @@ The first GPU run includes Julia and Metal compilation, so use the second
 benchmark pass for steady-state speed estimates.
 
 By default, `--gpu` uses `--conv auto`, which selects the Metal separable
-Gaussian convolution path with `--kernel-cutoff 2`. This is the speed-first path
+Gaussian convolution path with `--kernel-cutoff 3`. This is the speed-first path
 for real-time experiments. It approximates the full circular FFT convolution by
-truncating the separable Gaussian tail. Use `--conv fft` for the exact FFT
-baseline, or `--kernel-cutoff 4` for a more conservative separable approximation.
+truncating the separable Gaussian tail, while retaining about 99.996% of the
+continuous 2D Gaussian mass before renormalization. Use `--conv fft` for the
+exact FFT baseline, or `--kernel-cutoff 4` for an even more conservative
+separable approximation.
 
 Representative warmed timings on Apple M4 Pro:
 
-- `--gpu --conv separable --kernel-cutoff 2`, `N=105`: about `0.08 ms/step`, `2.5x` real time.
-- `--gpu --conv separable --kernel-cutoff 2`, `N=225`: about `0.18 ms/step`, `1.1x` real time.
+- `--gpu --conv separable --kernel-cutoff 3`, `N=105`: about `0.067 ms/step`, `3.0x` real time.
+- `--gpu --conv separable --kernel-cutoff 3`, `N=225`: about `0.192 ms/step`, `1.04x` real time.
 - `--gpu --conv fft`, `N=225`: about `0.61 ms/step`, `0.33x` real time.
 
 ## Real-Time Applet
@@ -98,11 +100,13 @@ Then open `http://127.0.0.1:8088/`, or use:
 julia --project=. scripts/serve_applet.jl --open
 ```
 
-The applet exposes the main simulation controls, visualizes the cortical sheet
-and retinal view as square heatmaps, and reports measured `ms / step` plus
-`real-time x`. GPU mode keeps the model state on Metal and only transfers one
-display frame per browser update. The first run may pause while Julia and Metal
-compile; subsequent streams are the useful real-time benchmark.
+The applet exposes the main simulation controls, including duty cycle percentage
+and the Metal separable kernel window. It visualizes the cortical sheet and
+retinal view as square heatmaps, shows the selected kernel radii/mass retention,
+and reports measured `ms / step` plus `real-time x`. GPU mode keeps the model
+state on Metal and only transfers one display frame per browser update. The
+first run may pause while Julia and Metal compile; subsequent streams are the
+useful real-time benchmark.
 
 ### CLI examples
 

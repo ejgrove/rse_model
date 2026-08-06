@@ -111,8 +111,13 @@ function _build_parser()
         "--kernel-cutoff"
             help = "Gaussian cutoff in sigma units for Metal separable convolution."
             arg_type = Float64
-            default = 2.0
+            default = 3.0
             dest_name = "kernel_cutoff"
+        "--duty-cycle"
+            help = "Stimulus duty cycle percentage. Defaults to the ModelParams threshold V."
+            arg_type = Float64
+            default = nothing
+            dest_name = "duty_cycle_percent"
         "--A"
             help = "Stimulus amplitude."
             arg_type = Float64
@@ -238,12 +243,16 @@ function _prepare_output_dir(args)
         string(args["N"])
     end
 
+    duty_suffix = args["duty_cycle_percent"] === nothing ? "" :
+        string("_Duty", _format_number(args["duty_cycle_percent"]))
+
     file_suffix = string(
         "simulation_A", _format_number(args["A"]),
         "_T", T_str,
         "_Se", _format_rounded(args["Se"]),
         "_Si", _format_rounded(args["Si"]),
         "_N", N_str,
+        duty_suffix,
     )
 
     out_path = ensure_unique_path(joinpath(args["out_path"], file_suffix))
@@ -284,6 +293,9 @@ function main(argv=ARGS)
     end
     if args["kernel_cutoff"] <= 0
         throw(ArgumentError("--kernel-cutoff must be positive"))
+    end
+    if args["duty_cycle_percent"] !== nothing && !(0 <= args["duty_cycle_percent"] <= 100)
+        throw(ArgumentError("--duty-cycle must be between 0 and 100"))
     end
 
     if args["backend"] == "cpu"
@@ -331,6 +343,7 @@ function main(argv=ARGS)
             gpu_threads=args["gpu_threads"],
             convolution=convolution,
             kernel_cutoff=args["kernel_cutoff"],
+            duty_cycle_percent=args["duty_cycle_percent"],
         )
         println(
             "Simulation compute duration ($(args["backend"])): ",
