@@ -85,6 +85,25 @@ Representative warmed timings on Apple M4 Pro:
 - `--gpu --conv separable --kernel-cutoff 2`, `N=225`: about `0.18 ms/step`, `1.1x` real time.
 - `--gpu --conv fft`, `N=225`: about `0.61 ms/step`, `0.33x` real time.
 
+## Real-Time Applet
+Run a local browser applet that streams live frames from Julia over a WebSocket:
+
+```bash
+julia --project=. scripts/serve_applet.jl
+```
+
+Then open `http://127.0.0.1:8088/`, or use:
+
+```bash
+julia --project=. scripts/serve_applet.jl --open
+```
+
+The applet exposes the main simulation controls, visualizes the cortical sheet
+and retinal view as square heatmaps, and reports measured `ms / step` plus
+`real-time x`. GPU mode keeps the model state on Metal and only transfers one
+display frame per browser update. The first run may pause while Julia and Metal
+compile; subsequent streams are the useful real-time benchmark.
+
 ### CLI examples
 
 ### Cortical and Retinal images

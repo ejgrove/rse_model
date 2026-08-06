@@ -1,4 +1,5 @@
 using Test
+using HTTP
 using Metal
 using RSEModel
 
@@ -84,4 +85,42 @@ end
     img = reshape(collect(Float32, 1:25), 5, 5)
     ret = retinal_transform(img)
     @test size(ret) == size(img)
+end
+
+@testset "live applet config" begin
+    config = live_config_from_query(Dict(
+        "backend" => "gpu",
+        "conv" => "auto",
+        "N" => "101",
+        "fast_n" => "true",
+        "fps" => "20",
+        "speed" => "0",
+        "seed" => "42",
+    ))
+    @test config.backend == :metal
+    @test config.convolution == :separable
+    @test config.N == 105
+    @test config.target_fps == 20
+    @test config.speed == 0
+    @test config.seed == 42
+end
+
+@testset "live applet server" begin
+    server = serve_applet_async(host="127.0.0.1", port=0, verbose=false)
+    try
+        url = applet_url(server, "127.0.0.1")
+        response = HTTP.get(url; status_exception=false)
+        @test response.status == 200
+        @test occursin("RSE Real-Time Viewer", String(response.body))
+
+        address = "127.0.0.1:$(HTTP.port(server))"
+        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1") do ws
+            hello = String(HTTP.WebSockets.receive(ws))
+            frame = String(HTTP.WebSockets.receive(ws))
+            @test occursin("\"type\":\"hello\"", hello)
+            @test occursin("\"type\":\"frame\"", frame)
+        end
+    finally
+        close(server)
+    end
 end

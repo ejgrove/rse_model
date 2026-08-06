@@ -5,6 +5,7 @@ include("Kernels.jl")
 include("Model.jl")
 include("Visualization.jl")
 include("CommandLine.jl")
+include("Applet.jl")
 
 export ModelParams,
     Snapshot,
@@ -25,6 +26,14 @@ export ModelParams,
     is_fast_fft_size,
     next_fast_odd_size,
     odd_positive_int,
+    LiveConfig,
+    LiveFrame,
+    normalize_live_config,
+    live_config_from_query,
+    stream_live_frames,
+    serve_applet,
+    serve_applet_async,
+    applet_url,
     main
 
 end
