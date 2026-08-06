@@ -206,6 +206,10 @@ end
     img = reshape(collect(Float32, 1:25), 5, 5)
     ret = retinal_transform(img)
     @test size(ret) == size(img)
+
+    wide_img = reshape(collect(Float32, 1:50), 5, 10)
+    wide_ret = retinal_transform(wide_img)
+    @test size(wide_ret) == size(wide_img)
 end
 
 @testset "parameter search smoke" begin
@@ -353,6 +357,8 @@ end
             @test occursin("\"Si\":4.5", hello)
             @test occursin("\"dt\":0.1", hello)
             @test occursin("\"cols\":50", frame)
+            @test occursin("\"retinalRows\":25", frame)
+            @test occursin("\"retinalCols\":50", frame)
         end
     finally
         close(server)

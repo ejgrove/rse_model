@@ -32,6 +32,8 @@ Base.@kwdef struct LiveFrame
     rows::Int
     cols::Int
     retinal_n::Int
+    retinal_rows::Int
+    retinal_cols::Int
     t::Float64
     lo::Float32
     hi::Float32
@@ -187,19 +189,19 @@ function _steps_per_frame(config::LiveConfig, p::ModelParams)
     return max(1, round(Int, target_frame_ms / p.dt))
 end
 
-function _activity_bytes(activity::AbstractMatrix)
+function _activity_bytes(activity::AbstractMatrix; lo=nothing, hi=nothing)
     rows, cols = size(activity)
-    lo = Float32(minimum(activity))
-    hi = Float32(maximum(activity))
-    scale = hi == lo ? 0.0f0 : 255.0f0 / (hi - lo)
+    lo_value = lo === nothing ? Float32(minimum(activity)) : Float32(lo)
+    hi_value = hi === nothing ? Float32(maximum(activity)) : Float32(hi)
+    scale = hi_value == lo_value ? 0.0f0 : 255.0f0 / (hi_value - lo_value)
     bytes = Vector{UInt8}(undef, rows * cols)
 
     @inbounds for row in 1:rows, col in 1:cols
-        value = hi == lo ? 0.0f0 : (Float32(activity[row, col]) - lo) * scale
+        value = hi_value == lo_value ? 0.0f0 : (Float32(activity[row, col]) - lo_value) * scale
         bytes[(row - 1) * cols + col] = UInt8(round(Int, clamp(value, 0.0f0, 255.0f0)))
     end
 
-    return bytes, lo, hi
+    return bytes, lo_value, hi_value
 end
 
 function _make_live_frame(
@@ -213,7 +215,7 @@ function _make_live_frame(
     retinal_activity::AbstractMatrix=activity,
 )
     bytes, lo, hi = _activity_bytes(activity)
-    retinal_bytes, _, _ = retinal_activity === activity ? (bytes, lo, hi) : _activity_bytes(retinal_activity)
+    retinal_bytes, _, _ = retinal_activity === activity ? (bytes, lo, hi) : _activity_bytes(retinal_activity; lo=lo, hi=hi)
     frame_ms = (time_ns() - frame_start_ns) / 1e6
     sim_ms = steps_per_frame * Float64(p.dt)
     ms_per_step = step_ms / steps_per_frame
@@ -225,6 +227,8 @@ function _make_live_frame(
         rows=size(activity, 1),
         cols=size(activity, 2),
         retinal_n=size(retinal_activity, 1),
+        retinal_rows=size(retinal_activity, 1),
+        retinal_cols=size(retinal_activity, 2),
         t=Float64(t),
         lo=lo,
         hi=hi,
@@ -238,20 +242,13 @@ function _make_live_frame(
     )
 end
 
-function _fill_coupled_views!(display, retinal, left_activity, right_activity)
+function _fill_coupled_views!(display, left_activity, right_activity)
     rows, cols = size(left_activity)
-    mid_col = cld(cols, 2)
     @inbounds for col in 1:cols, row in 1:rows
         display[row, col] = left_activity[row, col]
         display[row, cols + col] = right_activity[row, col]
-
-        if col <= mid_col
-            retinal[row, col] = right_activity[rows - row + 1, col]
-        else
-            retinal[row, col] = left_activity[row, col]
-        end
     end
-    return display, retinal
+    return display
 end
 
 function _throttle!(stream_start_ns::UInt64, config::LiveConfig, sim_elapsed_ms::Float64)
@@ -307,8 +304,9 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig)
         end
         step_ms = (time_ns() - step_start) / 1e6
         activity = abs.(Ue .- Ui)
+        retinal_activity = retinal_transform(activity)
         t = Float32(step_idx) * p.dt
-        frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p)
+        frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
         callback(frame) === false && break
         _throttle!(stream_start, config, frame_idx * steps_per_frame * Float64(p.dt))
     end
@@ -340,7 +338,6 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
     activity_left = similar(Ue_left)
     activity_right = similar(Ue_right)
     display_activity = Matrix{Float32}(undef, N, 2N)
-    retinal_activity = Matrix{Float32}(undef, N, N)
 
     steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
@@ -396,7 +393,8 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
         step_ms = (time_ns() - step_start) / 1e6
         @. activity_left = abs(Ue_left - Ui_left)
         @. activity_right = abs(Ue_right - Ui_right)
-        _fill_coupled_views!(display_activity, retinal_activity, activity_left, activity_right)
+        _fill_coupled_views!(display_activity, activity_left, activity_right)
+        retinal_activity = retinal_transform(display_activity)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -500,8 +498,9 @@ function _stream_metal_frames(callback::Function, config::LiveConfig)
         cortical_gpu .= abs.(Ue .- Ui)
         Metal.synchronize()
         activity = Array(cortical_gpu)
+        retinal_activity = retinal_transform(activity)
         t = Float32(step_idx) * p.dt
-        frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p)
+        frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
         callback(frame) === false && break
         _throttle!(stream_start, config, frame_idx * steps_per_frame * Float64(p.dt))
     end
@@ -545,7 +544,6 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
     activity_left_gpu = similar(Ue_left)
     activity_right_gpu = similar(Ue_right)
     display_activity = Matrix{Float32}(undef, N, 2N)
-    retinal_activity = Matrix{Float32}(undef, N, N)
 
     steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
@@ -654,7 +652,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
         Metal.synchronize()
         activity_left = Array(activity_left_gpu)
         activity_right = Array(activity_right_gpu)
-        _fill_coupled_views!(display_activity, retinal_activity, activity_left, activity_right)
+        _fill_coupled_views!(display_activity, activity_left, activity_right)
+        retinal_activity = retinal_transform(display_activity)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -734,6 +733,8 @@ function _frame_json(frame::LiveFrame)
         ",\"rows\":", frame.rows,
         ",\"cols\":", frame.cols,
         ",\"retinalN\":", frame.retinal_n,
+        ",\"retinalRows\":", frame.retinal_rows,
+        ",\"retinalCols\":", frame.retinal_cols,
         ",\"t\":", _json_number(frame.t),
         ",\"min\":", _json_number(frame.lo; digits=6),
         ",\"max\":", _json_number(frame.hi; digits=6),
@@ -1266,8 +1267,6 @@ const APPLET_HTML = raw"""
     let resetting = false;
     let streamToken = 0;
     let lastFrameAt = performance.now();
-    let retinalMap = null;
-    let retinalMapN = 0;
 
     function palette(v) {
       const t = Math.max(0, Math.min(1, v / 255));
@@ -1408,50 +1407,8 @@ const APPLET_HTML = raw"""
         `E r=${radiusE}, I r=${radiusI}; retained ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%`;
     }
 
-    function wrapIndex(v, n) {
-      return ((v % n) + n) % n;
-    }
-
-    function buildRetinalMap(n) {
-      const total = n * n;
-      const map = new Array(total);
-      for (let row = 0; row < n; row++) {
-        const y = -1 + 2 * row / Math.max(n - 1, 1);
-        for (let col = 0; col < n; col++) {
-          const x = -1 + 2 * col / Math.max(n - 1, 1);
-          const r = Math.hypot(x, y);
-          const theta = (Math.atan2(y, x) + 2 * Math.PI) % (2 * Math.PI);
-          const xIn = Math.log(r + 1e-26) / (2 * Math.PI) * n;
-          const yIn = theta / (2 * Math.PI) * n;
-          const x0Raw = Math.floor(xIn);
-          const y0Raw = Math.floor(yIn);
-          const dx = xIn - x0Raw;
-          const dy = yIn - y0Raw;
-          const x0 = wrapIndex(x0Raw, n);
-          const x1 = wrapIndex(x0Raw + 1, n);
-          const y0 = wrapIndex(y0Raw, n);
-          const y1 = wrapIndex(y0Raw + 1, n);
-          map[row * n + col] = { x0, x1, y0, y1, dx, dy };
-        }
-      }
-      retinalMap = map;
-      retinalMapN = n;
-    }
-
-    function drawRetinal(canvas, values, n) {
-      if (!retinalMap || retinalMapN !== n) buildRetinalMap(n);
-      const mapped = new Uint8Array(values.length);
-      for (let i = 0; i < mapped.length; i++) {
-        const m = retinalMap[i];
-        const v00 = values[m.y0 * n + m.x0];
-        const v01 = values[m.y0 * n + m.x1];
-        const v10 = values[m.y1 * n + m.x0];
-        const v11 = values[m.y1 * n + m.x1];
-        const top = (1 - m.dx) * v00 + m.dx * v01;
-        const bottom = (1 - m.dx) * v10 + m.dx * v11;
-        mapped[i] = Math.max(0, Math.min(255, Math.round((1 - m.dy) * top + m.dy * bottom)));
-      }
-      drawValues(canvas, mapped, n, n);
+    function drawRetinal(canvas, values, rows, cols) {
+      drawValues(canvas, values, rows, cols);
     }
 
     function decodeFrame(data) {
@@ -1529,9 +1486,10 @@ const APPLET_HTML = raw"""
         const rows = msg.rows || msg.N;
         const cols = msg.cols || msg.N;
         const retinalValues = decodeFrame(msg.retinalData || msg.data);
-        const retinalN = msg.retinalN || msg.N;
+        const retinalRows = msg.retinalRows || msg.retinalN || msg.N;
+        const retinalCols = msg.retinalCols || msg.retinalN || msg.N;
         drawValues(els.cortical, values, rows, cols);
-        drawRetinal(els.retinal, retinalValues, retinalN);
+        drawRetinal(els.retinal, retinalValues, retinalRows, retinalCols);
         els.simTime.textContent = `${msg.t.toFixed(1)} ms`;
         els.streamFps.textContent = observedFps.toFixed(1);
         els.msStep.textContent = msg.msPerStep.toFixed(3);
