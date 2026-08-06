@@ -14,7 +14,7 @@ Base.@kwdef struct ParameterSearchConfig
     duty_cycle_percent::Union{Nothing,Float64} = 50.0
     seed::Int = 42
     seed_mode::Symbol = :same
-    view::Symbol = :retinal
+    view::Symbol = :cortical
     cmap::String = "plasma"
     out_path::String = joinpath("outputs", "parameter_search")
     overwrite::Bool = false
@@ -382,19 +382,71 @@ end
 
 function _append_search_summary(summary_path::AbstractString, result)
     open(summary_path, "a") do io
-        println(
-            io,
-            join((
-                result.index,
-                result.total,
-                result.amplitude,
-                result.period,
-                result.seed === nothing ? "" : result.seed,
-                result.compute_seconds,
-                result.elapsed_seconds,
-            ), ","),
-        )
+        println(io, _summary_line(result))
     end
+end
+
+function _summary_header()
+    return "index,total,A,T_ms,seed,compute_seconds,elapsed_seconds"
+end
+
+function _summary_line(result)
+    return join((
+        result.index,
+        result.total,
+        result.amplitude,
+        result.period,
+        result.seed === nothing ? "" : result.seed,
+        result.compute_seconds,
+        result.elapsed_seconds,
+    ), ",")
+end
+
+function _record_search_result!(results::Vector, result)
+    results[result.index] = result
+    return results
+end
+
+function _write_search_summary(summary_path::AbstractString, results::Vector)
+    open(summary_path, "w") do io
+        println(io, _summary_header())
+        for result in results
+            println(io, _summary_line(result))
+        end
+    end
+    return summary_path
+end
+
+function _format_vector(values)
+    return join(_compact_number.(values), ",")
+end
+
+function _write_search_metadata(out_path::AbstractString, config::ParameterSearchConfig, total::Integer, interval_ms::Integer)
+    path = joinpath(out_path, "config.txt")
+    open(path, "w") do io
+        println(io, "RSEModel parameter search")
+        println(io, "N=", config.N)
+        println(io, "Se=", config.Se)
+        println(io, "Si=", config.Si)
+        println(io, "A_values=", _format_vector(config.A_values))
+        println(io, "T_ms_values=", _format_vector(config.period_values))
+        println(io, "times_ms=", join(config.times_ms, ","))
+        println(io, "start_time_ms=", minimum(config.times_ms))
+        println(io, "end_time_ms=", maximum(config.times_ms))
+        println(io, "interval_ms=", interval_ms)
+        println(io, "view=", config.view)
+        println(io, "backend=", config.backend)
+        println(io, "convolution=", config.convolution)
+        println(io, "boundary=periodic")
+        println(io, "duty_cycle_percent=", config.duty_cycle_percent === nothing ? "model" : _compact_number(config.duty_cycle_percent))
+        println(io, "seed=", config.seed)
+        println(io, "seed_mode=", config.seed_mode)
+        println(io, "workers=", config.workers)
+        println(io, "total_simulations=", total)
+        println(io, "summary=summary.csv")
+        println(io, "file_pattern=parameter_search_", config.view, "_{time_ms}ms.png")
+    end
+    return path
 end
 
 function _print_search_progress(config::ParameterSearchConfig, result, completed::Integer, total::Integer, search_start)
@@ -415,12 +467,13 @@ function _print_search_progress(config::ParameterSearchConfig, result, completed
     return nothing
 end
 
-function _run_parameter_search_serial!(montages, summary_path::AbstractString, config::ParameterSearchConfig, jobs, interval_ms::Integer, max_time_ms::Integer, search_start)
+function _run_parameter_search_serial!(montages, results::Vector, progress_summary_path::AbstractString, config::ParameterSearchConfig, jobs, interval_ms::Integer, max_time_ms::Integer, search_start)
     total = length(jobs)
     for (completed, job) in enumerate(jobs)
         result = _run_parameter_search_job(job, config, interval_ms, max_time_ms)
         _apply_search_result!(montages, config, result)
-        _append_search_summary(summary_path, result)
+        _record_search_result!(results, result)
+        _append_search_summary(progress_summary_path, result)
         _print_search_progress(config, result, completed, total, search_start)
     end
 
@@ -460,7 +513,7 @@ function _run_parameter_search_job_with_channel(args)
     return nothing
 end
 
-function _run_parameter_search_parallel!(montages, summary_path::AbstractString, config::ParameterSearchConfig, jobs, interval_ms::Integer, max_time_ms::Integer, search_start)
+function _run_parameter_search_parallel!(montages, results::Vector, progress_summary_path::AbstractString, config::ParameterSearchConfig, jobs, interval_ms::Integer, max_time_ms::Integer, search_start)
     target_workers = min(config.workers, length(jobs))
     worker_ids, added_workers = _ensure_search_workers!(target_workers)
     println("Parallel CPU workers: ", target_workers)
@@ -485,7 +538,8 @@ function _run_parameter_search_parallel!(montages, summary_path::AbstractString,
             result = take!(result_channel)
             completed += 1
             _apply_search_result!(montages, config, result)
-            _append_search_summary(summary_path, result)
+            _record_search_result!(results, result)
+            _append_search_summary(progress_summary_path, result)
             _print_search_progress(config, result, completed, length(jobs), search_start)
         end
 
@@ -516,6 +570,7 @@ function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfi
         " backend=", config.backend,
         " conv=", config.convolution,
         " boundary=periodic",
+        " view=", config.view,
         " duty=", _duty_text(config),
         " workers=", config.workers,
         " snapshots=", join(string.(config.times_ms), ","),
@@ -533,18 +588,24 @@ function run_parameter_search(config::ParameterSearchConfig=ParameterSearchConfi
 
     montages = Dict(time_ms => _make_montage_canvas(config, time_ms) for time_ms in config.times_ms)
     summary_path = joinpath(out_path, "summary.csv")
-    open(summary_path, "w") do io
-        println(io, "index,total,A,T_ms,seed,compute_seconds,elapsed_seconds")
+    progress_summary_path = joinpath(out_path, "summary_progress.csv")
+    open(progress_summary_path, "w") do io
+        println(io, _summary_header())
     end
+    _write_search_metadata(out_path, config, total, interval_ms)
 
     search_start = time_ns()
     jobs = _search_jobs(config)
+    results = Vector{Any}(undef, length(jobs))
 
     if config.backend == :cpu && config.workers > 1
-        _run_parameter_search_parallel!(montages, summary_path, config, jobs, interval_ms, max_time_ms, search_start)
+        _run_parameter_search_parallel!(montages, results, progress_summary_path, config, jobs, interval_ms, max_time_ms, search_start)
     else
-        _run_parameter_search_serial!(montages, summary_path, config, jobs, interval_ms, max_time_ms, search_start)
+        _run_parameter_search_serial!(montages, results, progress_summary_path, config, jobs, interval_ms, max_time_ms, search_start)
     end
+
+    _write_search_summary(summary_path, results)
+    rm(progress_summary_path; force=true)
 
     for time_ms in config.times_ms
         filename = joinpath(
@@ -616,7 +677,7 @@ function _search_parser()
         "--view"
             help = "Montage view: retinal or cortical."
             arg_type = String
-            default = "retinal"
+            default = "cortical"
         "--cmap"
             help = "Colormap name. Supports plasma, nipy_spectral, and grayscale."
             arg_type = String
