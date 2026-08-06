@@ -34,6 +34,7 @@ end
     default_duty = duty_cycle_percent_from_threshold(ModelParams{Float32}().V)
     @test 20 < default_duty < 21
     @test stimulus_threshold_from_duty_cycle_percent(default_duty) ≈ ModelParams{Float32}().V atol=1e-6
+    @test stimulus_threshold_from_duty_cycle_percent(50.0) ≈ 0.0 atol=1e-12
     @test RSEModel.strobe_stimulus(0.0f0, 0.7f0, 115.0f0, ModelParams{Float32}(), 50.0f0) == 0.0f0
     @test RSEModel.strobe_stimulus(30.0f0, 0.7f0, 115.0f0, ModelParams{Float32}(), 50.0f0) == 0.7f0
 end
@@ -186,6 +187,7 @@ end
     @test !isfile(joinpath(out_path, "summary_progress.csv"))
     @test isfile(joinpath(out_path, "parameter_search_cortical_00010ms.png"))
     @test occursin("simulation_end_time_ms=10", read(joinpath(out_path, "config.txt"), String))
+    @test occursin("stimulus_threshold=0", read(joinpath(out_path, "config.txt"), String))
     @test occursin("index,total,a_idx,t_idx,A,T_ms", first(readlines(joinpath(out_path, "summary.csv"))))
 end
 

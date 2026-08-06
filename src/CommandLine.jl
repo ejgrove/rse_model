@@ -134,7 +134,7 @@ function _build_parser()
             default = nothing
             dest_name = "boundary_y"
         "--duty-cycle"
-            help = "Stimulus duty cycle percentage. Defaults to the ModelParams threshold V."
+            help = "Stimulus duty cycle percentage. A value of 50 uses threshold 0. Defaults to the ModelParams threshold V."
             arg_type = Float64
             default = nothing
             dest_name = "duty_cycle_percent"

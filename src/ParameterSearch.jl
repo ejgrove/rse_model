@@ -446,6 +446,8 @@ function _write_search_metadata(out_path::AbstractString, config::ParameterSearc
         println(io, "convolution=", config.convolution)
         println(io, "boundary=periodic")
         println(io, "duty_cycle_percent=", config.duty_cycle_percent === nothing ? "model" : _compact_number(config.duty_cycle_percent))
+        println(io, "stimulus_formula=A*H(sin(2*pi*t/T)-stimulus_threshold)")
+        println(io, "stimulus_threshold=", config.duty_cycle_percent === nothing ? _compact_number(ModelParams().V) : _compact_number(stimulus_threshold_from_duty_cycle_percent(config.duty_cycle_percent)))
         println(io, "seed=", config.seed)
         println(io, "seed_mode=", config.seed_mode)
         println(io, "workers=", config.workers)
@@ -731,7 +733,7 @@ function _search_parser()
             default = 3.0
             dest_name = "kernel_cutoff"
         "--duty-cycle"
-            help = "Stimulus duty cycle percentage. Defaults to 50."
+            help = "Stimulus duty cycle percentage. A value of 50 uses threshold 0. Defaults to 50."
             arg_type = Float64
             default = 50.0
             dest_name = "duty_cycle_percent"
