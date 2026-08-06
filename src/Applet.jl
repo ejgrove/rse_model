@@ -16,7 +16,9 @@ Base.@kwdef struct LiveConfig
     speed::Float64 = 1.0
     gpu_threads::Int = 256
     kernel_cutoff::Float64 = 3.0
-    boundary::Symbol = :periodic
+    boundary::Union{Nothing,Symbol} = nothing
+    boundary_x::Symbol = :periodic
+    boundary_y::Symbol = :periodic
     coupling::Symbol = :none
     coupling_strength::Float32 = 0.02f0
     overlap_rows::Int = 6
@@ -53,9 +55,8 @@ function normalize_live_config(config::LiveConfig)
     convolution in (:fft, :separable) || throw(ArgumentError("convolution must be :auto, :fft, or :separable."))
     backend == :metal || convolution == :fft ||
         throw(ArgumentError("The CPU live backend currently supports FFT convolution only."))
-    boundary = config.boundary
-    boundary in (:periodic, :edge, :zero) || throw(ArgumentError("boundary must be :periodic, :edge, or :zero."))
-    _validate_boundary(boundary, convolution, backend)
+    boundary_x, boundary_y = _resolve_boundaries(config.boundary, config.boundary_x, config.boundary_y)
+    _validate_boundaries(boundary_x, boundary_y, convolution, backend)
     coupling = config.coupling
     coupling in (:none, :midline) || throw(ArgumentError("coupling must be :none or :midline."))
 
@@ -88,7 +89,9 @@ function normalize_live_config(config::LiveConfig)
         speed=config.speed,
         gpu_threads=config.gpu_threads,
         kernel_cutoff=config.kernel_cutoff,
-        boundary=boundary,
+        boundary=nothing,
+        boundary_x=boundary_x,
+        boundary_y=boundary_y,
         coupling=coupling,
         coupling_strength=config.coupling_strength,
         overlap_rows=overlap_rows,
@@ -136,6 +139,12 @@ function _parse_symbol(params, key, default)
     return Symbol(lowercase(value))
 end
 
+function _parse_optional_symbol(params, key)
+    value = _get(params, key, "")
+    isempty(value) && return nothing
+    return Symbol(lowercase(value))
+end
+
 function live_config_from_query(params::AbstractDict{String,String})
     seed_value = _get(params, "seed", "")
     seed = isempty(seed_value) ? nothing : parse(Int, seed_value)
@@ -155,7 +164,9 @@ function live_config_from_query(params::AbstractDict{String,String})
         speed=_parse_float(params, "speed", 1.0),
         gpu_threads=_parse_int(params, "gpu_threads", 256),
         kernel_cutoff=_parse_float(params, "kernel_cutoff", 3.0),
-        boundary=_parse_symbol(params, "boundary", :periodic),
+        boundary=_parse_optional_symbol(params, "boundary"),
+        boundary_x=_parse_symbol(params, "boundary_x", _parse_symbol(params, "boundary", :periodic)),
+        boundary_y=_parse_symbol(params, "boundary_y", _parse_symbol(params, "boundary", :periodic)),
         coupling=_parse_symbol(params, "coupling", :none),
         coupling_strength=_parse_float32(params, "coupling_strength", 0.02f0),
         overlap_rows=_parse_int(params, "overlap_rows", 6),
@@ -468,7 +479,8 @@ function _stream_metal_frames(callback::Function, config::LiveConfig)
                     t_step,
                     p,
                     config.gpu_threads,
-                    config.boundary,
+                    config.boundary_x,
+                    config.boundary_y,
                     config.duty_cycle_percent,
                 )
             end
@@ -591,7 +603,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
                     t_step,
                     p,
                     config.gpu_threads,
-                    config.boundary,
+                    config.boundary_x,
+                    config.boundary_y,
                     config.duty_cycle_percent,
                 )
                 _metal_step_separable!(
@@ -608,7 +621,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
                     t_step,
                     p,
                     config.gpu_threads,
-                    config.boundary,
+                    config.boundary_x,
+                    config.boundary_y,
                     config.duty_cycle_percent,
                 )
             end
@@ -694,7 +708,8 @@ function _hello_json(config::LiveConfig)
         ",\"Se\":", _json_number(config.Se),
         ",\"Si\":", _json_number(config.Si),
         ",\"kernelCutoff\":", _json_number(config.kernel_cutoff),
-        ",\"boundary\":", _json_string(config.boundary),
+        ",\"boundaryX\":", _json_string(config.boundary_x),
+        ",\"boundaryY\":", _json_string(config.boundary_y),
         ",\"coupling\":", _json_string(config.coupling),
         ",\"couplingStrength\":", _json_number(config.coupling_strength; digits=5),
         ",\"overlapRows\":", config.overlap_rows,
@@ -1144,7 +1159,8 @@ const APPLET_HTML = raw"""
         <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
         <label>Backend<select id="backend"><option value="metal">metal</option><option value="cpu">cpu</option></select></label>
         <label>Convolution<select id="conv"><option value="auto">auto</option><option value="separable">separable</option><option value="fft">fft</option></select></label>
-        <label>Boundary<select id="boundary"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
+        <label>Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
+        <label>Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
         <label>Coupling<select id="coupling"><option value="none">none</option><option value="midline">midline</option></select></label>
         <label>Speed<select id="speed"><option value="1">1x real time</option><option value="0.5">0.5x</option><option value="2">2x</option><option value="0">max</option></select></label>
         <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
@@ -1203,7 +1219,8 @@ const APPLET_HTML = raw"""
       fps: document.getElementById("fps"),
       backend: document.getElementById("backend"),
       conv: document.getElementById("conv"),
-      boundary: document.getElementById("boundary"),
+      boundaryX: document.getElementById("boundaryX"),
+      boundaryY: document.getElementById("boundaryY"),
       coupling: document.getElementById("coupling"),
       speed: document.getElementById("speed"),
       kernelCutoff: document.getElementById("kernelCutoff"),
@@ -1436,7 +1453,8 @@ const APPLET_HTML = raw"""
       params.set("fps", els.fps.value);
       params.set("backend", els.backend.value);
       params.set("conv", els.conv.value);
-      params.set("boundary", els.boundary.value);
+      params.set("boundary_x", els.boundaryX.value);
+      params.set("boundary_y", els.boundaryY.value);
       params.set("coupling", els.coupling.value);
       params.set("speed", els.speed.value);
       params.set("kernel_cutoff", els.kernelCutoff.value);
@@ -1474,7 +1492,7 @@ const APPLET_HTML = raw"""
           els.gridN.textContent = String(msg.N);
           const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
           const coupling = msg.coupling === "midline" ? `, midline g=${msg.couplingStrength}` : "";
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv}/${msg.boundary} at target ${msg.fps} fps, ${duty}${coupling}.`;
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY} at target ${msg.fps} fps, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {

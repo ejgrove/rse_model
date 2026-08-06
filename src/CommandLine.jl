@@ -120,9 +120,19 @@ function _build_parser()
             default = 3.0
             dest_name = "kernel_cutoff"
         "--boundary"
-            help = "Convolution boundary mode: periodic, edge, or zero. Non-periodic modes require Metal separable convolution."
+            help = "Convolution boundary mode for both axes: periodic, edge, or zero. Axis-specific flags override this."
             arg_type = String
-            default = "periodic"
+            default = nothing
+        "--boundary-x"
+            help = "Horizontal/left-right convolution boundary mode: periodic, edge, or zero."
+            arg_type = String
+            default = nothing
+            dest_name = "boundary_x"
+        "--boundary-y"
+            help = "Vertical/top-bottom convolution boundary mode: periodic, edge, or zero."
+            arg_type = String
+            default = nothing
+            dest_name = "boundary_y"
         "--duty-cycle"
             help = "Stimulus duty cycle percentage. Defaults to the ModelParams threshold V."
             arg_type = Float64
@@ -285,7 +295,9 @@ function main(argv=ARGS)
     args["images"] = _validate_images(args["images"])
     args["backend"] = args["gpu"] ? "metal" : _validate_backend(args["backend"])
     convolution = _validate_convolution(args["conv"], args["backend"])
-    boundary = _validate_boundary_cli(args["boundary"])
+    boundary_base = args["boundary"] === nothing ? :periodic : _validate_boundary_cli(args["boundary"])
+    boundary_x = args["boundary_x"] === nothing ? boundary_base : _validate_boundary_cli(args["boundary_x"])
+    boundary_y = args["boundary_y"] === nothing ? boundary_base : _validate_boundary_cli(args["boundary_y"])
 
     if args["interval"] <= 0
         throw(ArgumentError("--interval must be positive"))
@@ -354,7 +366,8 @@ function main(argv=ARGS)
             gpu_threads=args["gpu_threads"],
             convolution=convolution,
             kernel_cutoff=args["kernel_cutoff"],
-            boundary=boundary,
+            boundary_x=boundary_x,
+            boundary_y=boundary_y,
             duty_cycle_percent=args["duty_cycle_percent"],
         )
         println(

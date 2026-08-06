@@ -118,9 +118,23 @@ end
         ce_pair = RSEModel.MetalSeparableConvolver(2.0, Ue; cutoff=3.0)
         ci_pair = RSEModel.MetalSeparableConvolver(5.0, Ui; cutoff=3.0)
 
-        for boundary in (:periodic, :edge, :zero)
-            RSEModel.separable_convolution!(out_e_separate, ce_separate, Ue; gpu_threads=128, boundary=boundary)
-            RSEModel.separable_convolution!(out_i_separate, ci_separate, Ui; gpu_threads=128, boundary=boundary)
+        for (boundary_x, boundary_y) in ((:periodic, :periodic), (:edge, :zero), (:zero, :edge))
+            RSEModel.separable_convolution!(
+                out_e_separate,
+                ce_separate,
+                Ue;
+                gpu_threads=128,
+                boundary_x=boundary_x,
+                boundary_y=boundary_y,
+            )
+            RSEModel.separable_convolution!(
+                out_i_separate,
+                ci_separate,
+                Ui;
+                gpu_threads=128,
+                boundary_x=boundary_x,
+                boundary_y=boundary_y,
+            )
             RSEModel.separable_convolution_pair!(
                 out_e_pair,
                 out_i_pair,
@@ -129,7 +143,8 @@ end
                 Ue,
                 Ui;
                 gpu_threads=128,
-                boundary=boundary,
+                boundary_x=boundary_x,
+                boundary_y=boundary_y,
             )
             Metal.synchronize()
 
@@ -157,7 +172,8 @@ end
         "speed" => "0",
         "seed" => "42",
         "duty_cycle" => "25",
-        "boundary" => "edge",
+        "boundary_x" => "edge",
+        "boundary_y" => "zero",
         "coupling" => "midline",
         "coupling_strength" => "0.03",
         "overlap_rows" => "5",
@@ -169,10 +185,19 @@ end
     @test config.speed == 0
     @test config.seed == 42
     @test config.duty_cycle_percent == 25.0f0
-    @test config.boundary == :edge
+    @test config.boundary_x == :edge
+    @test config.boundary_y == :zero
     @test config.coupling == :midline
     @test config.coupling_strength == 0.03f0
     @test config.overlap_rows == 6
+
+    legacy_config = live_config_from_query(Dict(
+        "backend" => "metal",
+        "conv" => "separable",
+        "boundary" => "edge",
+    ))
+    @test legacy_config.boundary_x == :edge
+    @test legacy_config.boundary_y == :edge
 end
 
 @testset "live applet server" begin

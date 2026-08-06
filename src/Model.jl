@@ -36,19 +36,33 @@ function strobe_stimulus(t, A, period, p::ModelParams, duty_cycle_percent=nothin
     return T(A) * step_function(sin((T(2) * T(pi) * T(t)) / T(period)) - threshold)
 end
 
-function _boundary_code(boundary::Symbol)
-    boundary == :periodic && return BOUNDARY_PERIODIC
-    boundary == :edge && return BOUNDARY_EDGE
-    boundary == :zero && return BOUNDARY_ZERO
+function _boundary_mode(boundary::Symbol)
+    boundary in (:periodic, :edge, :zero) && return boundary
     throw(ArgumentError("boundary must be :periodic, :edge, or :zero."))
 end
 
-function _validate_boundary(boundary::Symbol, convolution::Symbol, backend::Symbol)
-    _boundary_code(boundary)
-    if boundary != :periodic && (backend != :metal || convolution != :separable)
+function _boundary_code(boundary::Symbol)
+    mode = _boundary_mode(boundary)
+    mode == :periodic && return BOUNDARY_PERIODIC
+    mode == :edge && return BOUNDARY_EDGE
+    return BOUNDARY_ZERO
+end
+
+function _resolve_boundaries(boundary, boundary_x::Symbol, boundary_y::Symbol)
+    if boundary !== nothing
+        mode = _boundary_mode(boundary)
+        return mode, mode
+    end
+    return _boundary_mode(boundary_x), _boundary_mode(boundary_y)
+end
+
+function _validate_boundaries(boundary_x::Symbol, boundary_y::Symbol, convolution::Symbol, backend::Symbol)
+    _boundary_code(boundary_x)
+    _boundary_code(boundary_y)
+    if (boundary_x != :periodic || boundary_y != :periodic) && (backend != :metal || convolution != :separable)
         throw(ArgumentError("Only the Metal separable convolution path supports non-periodic boundaries."))
     end
-    return boundary
+    return boundary_x, boundary_y
 end
 
 struct FFTConvolver{T,P,Q}
@@ -418,7 +432,9 @@ function separable_convolution!(
     convolver::MetalSeparableConvolver,
     U;
     gpu_threads::Integer=256,
-    boundary::Symbol=:periodic,
+    boundary=nothing,
+    boundary_x::Symbol=:periodic,
+    boundary_y::Symbol=:periodic,
 )
     rows_u, cols_u = size(U)
     rows = UInt32(rows_u)
@@ -426,7 +442,9 @@ function separable_convolution!(
     n = UInt32(length(U))
     klen = UInt32(length(convolver.kernel))
     radius = UInt32(convolver.radius)
-    boundary_code = _boundary_code(boundary)
+    boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
+    boundary_x_code = _boundary_code(boundary_x)
+    boundary_y_code = _boundary_code(boundary_y)
     threads = min(gpu_threads, length(U))
     groups = cld(length(U), threads)
 
@@ -439,7 +457,7 @@ function separable_convolution!(
         cols,
         klen,
         n,
-        boundary_code,
+        boundary_x_code,
     )
     @metal threads=threads groups=groups _metal_conv_rows_kernel!(
         out,
@@ -450,7 +468,7 @@ function separable_convolution!(
         cols,
         klen,
         n,
-        boundary_code,
+        boundary_y_code,
     )
 
     return out
@@ -464,7 +482,9 @@ function separable_convolution_pair!(
     Ue,
     Ui;
     gpu_threads::Integer=256,
-    boundary::Symbol=:periodic,
+    boundary=nothing,
+    boundary_x::Symbol=:periodic,
+    boundary_y::Symbol=:periodic,
 )
     rows_u, cols_u = size(Ue)
     rows = UInt32(rows_u)
@@ -474,7 +494,9 @@ function separable_convolution_pair!(
     klen_i = UInt32(length(convolver_i.kernel))
     radius_e = UInt32(convolver_e.radius)
     radius_i = UInt32(convolver_i.radius)
-    boundary_code = _boundary_code(boundary)
+    boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
+    boundary_x_code = _boundary_code(boundary_x)
+    boundary_y_code = _boundary_code(boundary_y)
     threads = min(gpu_threads, length(Ue))
     groups = cld(length(Ue), threads)
 
@@ -492,7 +514,7 @@ function separable_convolution_pair!(
         klen_e,
         klen_i,
         n,
-        boundary_code,
+        boundary_x_code,
     )
     @metal threads=threads groups=groups _metal_conv_rows_pair_kernel!(
         out_e,
@@ -508,7 +530,7 @@ function separable_convolution_pair!(
         klen_e,
         klen_i,
         n,
-        boundary_code,
+        boundary_y_code,
     )
 
     return out_e, out_i
@@ -684,7 +706,8 @@ function _metal_step_separable!(
     t::Float32,
     p::ModelParams{Float32},
     gpu_threads::Integer,
-    boundary::Symbol=:periodic,
+    boundary_x::Symbol=:periodic,
+    boundary_y::Symbol=:periodic,
     duty_cycle_percent=nothing,
 )
     separable_convolution_pair!(
@@ -695,7 +718,8 @@ function _metal_step_separable!(
         Ue,
         Ui;
         gpu_threads=gpu_threads,
-        boundary=boundary,
+        boundary_x=boundary_x,
+        boundary_y=boundary_y,
     )
 
     stim = strobe_stimulus(t, A, period, p, duty_cycle_percent)
@@ -760,13 +784,16 @@ function run_simulation_gpu(;
     gpu_threads::Integer=256,
     convolution::Symbol=:separable,
     kernel_cutoff::Real=3.0,
-    boundary::Symbol=:periodic,
+    boundary=nothing,
+    boundary_x::Symbol=:periodic,
+    boundary_y::Symbol=:periodic,
     duty_cycle_percent=nothing,
 ) where {F<:AbstractFloat}
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     dtype === Float32 || throw(ArgumentError("The Metal backend currently supports Float32 only."))
     gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
-    _validate_boundary(boundary, convolution, :metal)
+    boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
+    _validate_boundaries(boundary_x, boundary_y, convolution, :metal)
 
     timer_start = time_ns()
     pT = _params_as(Float32, p)
@@ -847,7 +874,8 @@ function run_simulation_gpu(;
                 t,
                 pT,
                 gpu_threads,
-                boundary,
+                boundary_x,
+                boundary_y,
                 duty_cycle_percent,
             )
         end
@@ -896,9 +924,12 @@ function run_simulation(;
     gpu_threads::Integer=256,
     convolution::Symbol=:fft,
     kernel_cutoff::Real=3.0,
-    boundary::Symbol=:periodic,
+    boundary=nothing,
+    boundary_x::Symbol=:periodic,
+    boundary_y::Symbol=:periodic,
     duty_cycle_percent=nothing,
 ) where {F<:AbstractFloat}
+    boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
     if backend in (:metal, :gpu)
         return run_simulation_gpu(
             N=N,
@@ -918,14 +949,15 @@ function run_simulation(;
             gpu_threads=gpu_threads,
             convolution=convolution,
             kernel_cutoff=kernel_cutoff,
-            boundary=boundary,
+            boundary_x=boundary_x,
+            boundary_y=boundary_y,
             duty_cycle_percent=duty_cycle_percent,
         )
     elseif backend != :cpu
         throw(ArgumentError("backend must be :cpu or :metal"))
     end
     convolution == :fft || throw(ArgumentError("The CPU backend currently supports :fft convolution only."))
-    _validate_boundary(boundary, convolution, :cpu)
+    _validate_boundaries(boundary_x, boundary_y, convolution, :cpu)
 
     timer_start = time_ns()
     pT = _params_as(dtype, p)
