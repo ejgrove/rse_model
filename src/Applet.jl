@@ -46,6 +46,11 @@ Base.@kwdef struct LiveFrame
     retinal_data::Vector{UInt8}
 end
 
+Base.@kwdef mutable struct LiveRuntime
+    target_fps::Int = 30
+    speed::Float64 = 1.0
+end
+
 function normalize_live_config(config::LiveConfig)
     backend = config.backend == :gpu ? :metal : config.backend
     backend in (:cpu, :metal) || throw(ArgumentError("backend must be :cpu or :metal."))
@@ -198,9 +203,17 @@ function _live_model_params(config::LiveConfig)
     return ModelParams{Float32}(dt=config.dt)
 end
 
-function _steps_per_frame(config::LiveConfig, p::ModelParams)
-    target_frame_ms = 1000 / config.target_fps
+function _live_runtime(config::LiveConfig)
+    return LiveRuntime(target_fps=config.target_fps, speed=config.speed)
+end
+
+function _steps_per_frame(target_fps::Integer, p::ModelParams)
+    target_frame_ms = 1000 / max(1, target_fps)
     return max(1, round(Int, target_frame_ms / p.dt))
+end
+
+function _steps_per_frame(config::LiveConfig, p::ModelParams)
+    return _steps_per_frame(config.target_fps, p)
 end
 
 function _activity_bytes(activity::AbstractMatrix; lo=nothing, hi=nothing)
@@ -274,17 +287,21 @@ function _fill_coupled_retinal_source!(retinal_source, left_activity, right_acti
     return retinal_source
 end
 
-function _throttle!(stream_start_ns::UInt64, config::LiveConfig, sim_elapsed_ms::Float64)
-    config.speed <= 0 && return
-    target_elapsed = sim_elapsed_ms / (1000 * config.speed)
+function _throttle!(stream_start_ns::UInt64, speed::Real, sim_elapsed_ms::Float64)
+    speed <= 0 && return
+    target_elapsed = sim_elapsed_ms / (1000 * speed)
     actual_elapsed = (time_ns() - stream_start_ns) / 1e9
     delay = target_elapsed - actual_elapsed
     delay > 0.001 && sleep(delay)
     return
 end
 
-function _stream_cpu_frames(callback::Function, config::LiveConfig)
-    _uses_two_hemispheres(config) && return _stream_cpu_coupled_frames(callback, config)
+function _throttle!(stream_start_ns::UInt64, config::LiveConfig, sim_elapsed_ms::Float64)
+    return _throttle!(stream_start_ns, config.speed, sim_elapsed_ms)
+end
+
+function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::LiveRuntime)
+    _uses_two_hemispheres(config) && return _stream_cpu_coupled_frames(callback, config, runtime)
     p = _live_model_params(config)
     rng = _rng(config.seed)
     Ue = rand(rng, Float32, config.N, config.N)
@@ -297,12 +314,12 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig)
     Uic = similar(Ui)
     noise = Array{Float32}(undef, 2, config.N, config.N)
 
-    steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
     step_idx = 0
     frame_idx = 0
 
     while config.max_frames == 0 || frame_idx < config.max_frames
+        steps_per_frame = _steps_per_frame(runtime.target_fps, p)
         frame_idx += 1
         frame_start = time_ns()
         step_start = time_ns()
@@ -331,13 +348,13 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
         callback(frame) === false && break
-        _throttle!(stream_start, config, frame_idx * steps_per_frame * Float64(p.dt))
+        _throttle!(stream_start, runtime.speed, Float64(step_idx) * Float64(p.dt))
     end
 
     return frame_idx
 end
 
-function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
+function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runtime::LiveRuntime)
     p = _live_model_params(config)
     rng = _rng(config.seed)
     N = config.N
@@ -363,12 +380,12 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
     display_activity = Matrix{Float32}(undef, N, 2N)
     retinal_source = Matrix{Float32}(undef, 2N, N)
 
-    steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
     step_idx = 0
     frame_idx = 0
 
     while config.max_frames == 0 || frame_idx < config.max_frames
+        steps_per_frame = _steps_per_frame(runtime.target_fps, p)
         frame_idx += 1
         frame_start = time_ns()
         step_start = time_ns()
@@ -434,14 +451,14 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
             retinal_activity,
         )
         callback(frame) === false && break
-        _throttle!(stream_start, config, frame_idx * steps_per_frame * Float64(p.dt))
+        _throttle!(stream_start, runtime.speed, Float64(step_idx) * Float64(p.dt))
     end
 
     return frame_idx
 end
 
-function _stream_metal_frames(callback::Function, config::LiveConfig)
-    _uses_two_hemispheres(config) && return _stream_metal_coupled_frames(callback, config)
+function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::LiveRuntime)
+    _uses_two_hemispheres(config) && return _stream_metal_coupled_frames(callback, config, runtime)
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     p = _live_model_params(config)
     config.seed === nothing || Metal.seed!(config.seed)
@@ -467,12 +484,12 @@ function _stream_metal_frames(callback::Function, config::LiveConfig)
     noise_I = similar(Ui)
     cortical_gpu = similar(Ue)
 
-    steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
     step_idx = 0
     frame_idx = 0
 
     while config.max_frames == 0 || frame_idx < config.max_frames
+        steps_per_frame = _steps_per_frame(runtime.target_fps, p)
         frame_idx += 1
         frame_start = time_ns()
         step_start = time_ns()
@@ -529,13 +546,13 @@ function _stream_metal_frames(callback::Function, config::LiveConfig)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
         callback(frame) === false && break
-        _throttle!(stream_start, config, frame_idx * steps_per_frame * Float64(p.dt))
+        _throttle!(stream_start, runtime.speed, Float64(step_idx) * Float64(p.dt))
     end
 
     return frame_idx
 end
 
-function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
+function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, runtime::LiveRuntime)
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     p = _live_model_params(config)
     config.seed === nothing || Metal.seed!(config.seed)
@@ -573,12 +590,12 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
     display_activity = Matrix{Float32}(undef, N, 2N)
     retinal_source = Matrix{Float32}(undef, 2N, N)
 
-    steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
     step_idx = 0
     frame_idx = 0
 
     while config.max_frames == 0 || frame_idx < config.max_frames
+        steps_per_frame = _steps_per_frame(runtime.target_fps, p)
         frame_idx += 1
         frame_start = time_ns()
         step_start = time_ns()
@@ -697,18 +714,19 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
             retinal_activity,
         )
         callback(frame) === false && break
-        _throttle!(stream_start, config, frame_idx * steps_per_frame * Float64(p.dt))
+        _throttle!(stream_start, runtime.speed, Float64(step_idx) * Float64(p.dt))
     end
 
     return frame_idx
 end
 
-function stream_live_frames(callback::Function, config::LiveConfig=LiveConfig())
+function stream_live_frames(callback::Function, config::LiveConfig=LiveConfig(), runtime::Union{Nothing,LiveRuntime}=nothing)
     normalized = normalize_live_config(config)
+    live_runtime = runtime === nothing ? _live_runtime(normalized) : runtime
     if normalized.backend == :metal
-        return _stream_metal_frames(callback, normalized)
+        return _stream_metal_frames(callback, normalized, live_runtime)
     else
-        return _stream_cpu_frames(callback, normalized)
+        return _stream_cpu_frames(callback, normalized, live_runtime)
     end
 end
 
@@ -800,9 +818,37 @@ function _safe_ws_send(ws, message)
     end
 end
 
+function _apply_visual_control!(runtime::LiveRuntime, message::AbstractString)
+    prefix = "visual:"
+    startswith(message, prefix) || return false
+    payload = ncodeunits(message) == ncodeunits(prefix) ? "" :
+        message[nextind(message, firstindex(message), ncodeunits(prefix)):lastindex(message)]
+    isempty(payload) && return true
+
+    for part in split(payload, '&')
+        isempty(part) && continue
+        pieces = split(part, '='; limit=2)
+        length(pieces) == 2 || continue
+        key, value = pieces
+        try
+            if key == "fps"
+                runtime.target_fps = max(1, parse(Int, value))
+            elseif key == "speed"
+                speed = parse(Float64, value)
+                speed >= 0 && (runtime.speed = speed)
+            end
+        catch
+            continue
+        end
+    end
+    return true
+end
+
 function _stream_websocket(ws, params)
     paused = Ref(false)
     closed = Ref(false)
+    config = live_config_from_query(params)
+    runtime = _live_runtime(config)
     control_task = @async try
         while !closed[]
             message = String(HTTP.WebSockets.receive(ws))
@@ -813,6 +859,8 @@ function _stream_websocket(ws, params)
             elseif message == "close"
                 closed[] = true
                 break
+            else
+                _apply_visual_control!(runtime, message)
             end
         end
     catch err
@@ -823,9 +871,8 @@ function _stream_websocket(ws, params)
     end
 
     try
-        config = live_config_from_query(params)
         _safe_ws_send(ws, _hello_json(config)) || return
-        frames = stream_live_frames(config) do frame
+        frames = stream_live_frames(config, runtime) do frame
             while paused[] && !closed[]
                 sleep(0.03)
             end
@@ -909,7 +956,7 @@ const APPLET_HTML = raw"""
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RSE Real-Time Viewer</title>
+  <title>Real-time Strobe Hallucination Simulator</title>
   <style>
     :root {
       --bg: #edf5f7;
@@ -948,13 +995,13 @@ const APPLET_HTML = raw"""
       margin: 0 auto;
       padding: 28px;
       display: grid;
-      grid-template-columns: 330px 1fr;
+      grid-template-columns: 350px 1fr;
       gap: 22px;
     }
 
     h1 {
       margin: 0 0 8px;
-      font-size: clamp(28px, 4vw, 54px);
+      font-size: clamp(28px, 3.4vw, 46px);
       letter-spacing: -0.06em;
       line-height: 0.95;
       color: #092337;
@@ -985,15 +1032,59 @@ const APPLET_HTML = raw"""
 
     .subtitle {
       color: var(--muted);
-      margin: 0 0 22px;
+      margin: 0 0 18px;
       line-height: 1.45;
       font-size: 14px;
+    }
+
+    .key-hints {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .key {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      box-shadow: var(--soft-shadow);
+    }
+
+    .control-section {
+      margin-top: 14px;
+      padding: 12px;
+      border: 1px solid rgba(198, 216, 226, 0.78);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.55);
+    }
+
+    .section-title {
+      margin-bottom: 10px;
+      color: #0b3146;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
     }
 
     .control-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 12px;
+      gap: 10px;
+    }
+
+    .wide {
+      grid-column: 1 / -1;
     }
 
     label {
@@ -1024,7 +1115,7 @@ const APPLET_HTML = raw"""
       display: flex;
       align-items: center;
       gap: 9px;
-      padding: 10px 0 2px;
+      padding: 8px 0 0;
       color: var(--ink);
     }
 
@@ -1079,7 +1170,7 @@ const APPLET_HTML = raw"""
 
     .metrics {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
     }
 
@@ -1087,8 +1178,8 @@ const APPLET_HTML = raw"""
       border: 1px solid var(--line);
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 251, 252, 0.92));
-      border-radius: 16px;
-      padding: 9px 10px;
+      border-radius: 12px;
+      padding: 5px 8px;
       min-width: 0;
       box-shadow: var(--soft-shadow);
     }
@@ -1096,7 +1187,7 @@ const APPLET_HTML = raw"""
     .metric span {
       display: block;
       color: var(--muted);
-      font-size: 9.5px;
+      font-size: 8.5px;
       letter-spacing: 0.14em;
       text-transform: uppercase;
       white-space: nowrap;
@@ -1106,8 +1197,8 @@ const APPLET_HTML = raw"""
 
     .metric strong {
       display: block;
-      margin-top: 4px;
-      font-size: clamp(14px, 1.6vw, 21px);
+      margin-top: 2px;
+      font-size: clamp(12px, 1.15vw, 16px);
       letter-spacing: -0.045em;
       white-space: nowrap;
     }
@@ -1151,7 +1242,7 @@ const APPLET_HTML = raw"""
     canvas {
       display: block;
       width: 100%;
-      border-radius: 18px;
+      border-radius: 0;
       image-rendering: pixelated;
       background: #071018;
       box-shadow: inset 0 0 0 1px rgba(13, 38, 56, 0.12);
@@ -1164,7 +1255,7 @@ const APPLET_HTML = raw"""
     .canvas-frame {
       position: relative;
       padding: 54px 44px 44px;
-      border-radius: 22px;
+      border-radius: 14px;
       background:
         radial-gradient(circle at 50% 18%, rgba(0, 158, 170, 0.07), transparent 16rem),
         linear-gradient(180deg, #fbfdfe, #f3f8fa);
@@ -1284,6 +1375,25 @@ const APPLET_HTML = raw"""
       image-rendering: auto;
     }
 
+    .stimulus-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(247, 251, 252, 0.94));
+      padding: 10px;
+      box-shadow: var(--soft-shadow);
+    }
+
+    .stimulus-card .view-head {
+      margin-bottom: 6px;
+    }
+
+    .stimulus-canvas {
+      aspect-ratio: 8 / 1.35;
+      background: #f8fbfd;
+      image-rendering: auto;
+    }
+
     .tiny-note {
       margin-top: 8px;
       color: var(--muted);
@@ -1292,8 +1402,8 @@ const APPLET_HTML = raw"""
     }
 
     .legend {
-      height: 10px;
-      border-radius: 999px;
+      height: 9px;
+      border-radius: 0;
       background: var(--legend-gradient);
       border: 1px solid var(--line);
       box-shadow: var(--soft-shadow);
@@ -1310,31 +1420,60 @@ const APPLET_HTML = raw"""
 <body>
   <main>
     <section class="panel">
-      <h2>RSE Model</h2>
-      <h1>Real-time field viewer</h1>
-      <p class="subtitle">Streams the Julia simulation into the browser. GPU mode keeps the model on Metal and sends only display frames.</p>
-      <div class="control-grid">
-        <label>N<input id="n" type="number" min="5" step="2" value="81"></label>
-        <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
-        <label>Backend<select id="backend"><option value="metal">metal</option><option value="cpu">cpu</option></select></label>
-        <label>Convolution<select id="conv"><option value="auto">auto</option><option value="separable">separable</option><option value="fft">fft</option></select></label>
-        <label>Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
-        <label>Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
-        <label>Coupling<select id="coupling"><option value="off">off</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
-        <label>Speed<select id="speed"><option value="1">1x real time</option><option value="0.5">0.5x</option><option value="2">2x</option><option value="0">max</option></select></label>
-        <label>A<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
-        <label>T (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
-        <label>Duty (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
-        <label>Se<input id="se" type="number" min="0.1" step="0.05" value="2"></label>
-        <label>Si<input id="si" type="number" min="0.1" step="0.05" value="5"></label>
-        <label>dt (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
-        <label>Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
-        <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
-        <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
-        <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
+      <h2>Rule-Ermentrout-Stroffegen</h2>
+      <h1>Real-time Strobe Hallucination Simulator</h1>
+      <p class="subtitle key-hints"><span class="key">Space</span> pause/play <span class="key">Enter</span> reset/apply</p>
+
+      <div class="control-section">
+        <div class="section-title">Visualization</div>
+        <div class="control-grid">
+          <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
+          <label>Speed<select id="speed"><option value="1">1x real time</option><option value="0.5">0.5x</option><option value="2">2x</option><option value="0">max</option></select></label>
+          <label class="wide">Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
+        </div>
       </div>
-      <label class="check-row"><input id="fastN" type="checkbox" checked> Snap to FFT-friendly odd N</label>
-      <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
+
+      <div class="control-section">
+        <div class="section-title">Backend Implementation</div>
+        <div class="control-grid">
+          <label>Backend<select id="backend"><option value="metal">gpu / metal</option><option value="cpu">cpu</option></select></label>
+          <label>Convolution<select id="conv"><option value="auto">auto</option><option value="separable">separable</option><option value="fft">fft</option></select></label>
+          <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
+          <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
+        </div>
+        <label class="check-row"><input id="fastN" type="checkbox" checked> Snap to FFT-friendly odd N</label>
+      </div>
+
+      <div class="control-section">
+        <div class="section-title">Boundary / Coupling</div>
+        <div class="control-grid">
+          <label>Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
+          <label>Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
+          <label>Coupling<select id="coupling"><option value="off">off</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
+          <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
+          <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
+        </div>
+      </div>
+
+      <div class="control-section">
+        <div class="section-title">Strobe Parameters</div>
+        <div class="control-grid">
+          <label>A<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
+          <label>T (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
+          <label>Duty (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
+        </div>
+      </div>
+
+      <div class="control-section">
+        <div class="section-title">Neural Field Parameters</div>
+        <div class="control-grid">
+          <label>N<input id="n" type="number" min="5" step="2" value="81"></label>
+          <label>Se<input id="se" type="number" min="0.1" step="0.05" value="2"></label>
+          <label>Si<input id="si" type="number" min="0.1" step="0.05" value="5"></label>
+          <label>dt (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
+        </div>
+      </div>
+
       <div class="kernel-card">
         <div class="view-head"><div class="view-title">Kernel window</div><div class="view-note" id="kernelInfo">-</div></div>
         <canvas id="kernelGraph" class="kernel-canvas"></canvas>
@@ -1352,9 +1491,11 @@ const APPLET_HTML = raw"""
         <div class="metric"><span>Sim time</span><strong id="simTime">0 ms</strong></div>
         <div class="metric"><span>Stream FPS</span><strong id="streamFps">0</strong></div>
         <div class="metric"><span>ms / step</span><strong id="msStep">0</strong></div>
-        <div class="metric"><span>dt</span><strong id="dtMetric">0.2 ms</strong></div>
         <div class="metric"><span>Real-time x</span><strong id="rtx">0</strong></div>
-        <div class="metric"><span>Grid</span><strong id="gridN">-</strong></div>
+      </div>
+      <div class="stimulus-card">
+        <div class="view-head"><div class="view-title">Stimulus</div><div class="view-note" id="stimulusInfo">moving 0.5 s window</div></div>
+        <canvas id="stimulusGraph" class="stimulus-canvas"></canvas>
       </div>
       <div class="views">
         <div class="view">
@@ -1423,10 +1564,10 @@ const APPLET_HTML = raw"""
       simTime: document.getElementById("simTime"),
       streamFps: document.getElementById("streamFps"),
       msStep: document.getElementById("msStep"),
-      dtMetric: document.getElementById("dtMetric"),
       rtx: document.getElementById("rtx"),
-      gridN: document.getElementById("gridN"),
       range: document.getElementById("range"),
+      stimulusGraph: document.getElementById("stimulusGraph"),
+      stimulusInfo: document.getElementById("stimulusInfo"),
       corticalFrame: document.getElementById("corticalFrame"),
       hemiLeft: document.getElementById("hemiLeft"),
       hemiRight: document.getElementById("hemiRight"),
@@ -1443,6 +1584,11 @@ const APPLET_HTML = raw"""
     let streamToken = 0;
     let lastFrameAt = performance.now();
     let lastDisplayFrame = null;
+    let streamStimulus = {
+      A: Number(els.amp.value) || 0,
+      period: Number(els.period.value) || 1,
+      duty: Number(els.duty.value) || 50
+    };
 
     function activeColorStops() {
       return colorMaps[els.colorMap.value] || colorMaps.plasma;
@@ -1556,10 +1702,9 @@ const APPLET_HTML = raw"""
       els.simTime.textContent = "0 ms";
       els.streamFps.textContent = "0";
       els.msStep.textContent = "0";
-      els.dtMetric.textContent = `${Number(els.dt.value).toFixed(3)} ms`;
       els.rtx.textContent = "0";
-      els.gridN.textContent = "-";
       els.range.textContent = "range -";
+      drawStimulusGraph(0);
     }
 
     function gaussian1dValue(x, sigma) {
@@ -1653,6 +1798,80 @@ const APPLET_HTML = raw"""
       drawValues(canvas, values, rows, cols);
     }
 
+    function stimulusThreshold(duty) {
+      return Math.sin(Math.PI * (0.5 - Math.max(0, Math.min(100, duty)) / 100));
+    }
+
+    function strobeValue(t) {
+      const period = Math.max(1e-6, streamStimulus.period);
+      const threshold = stimulusThreshold(streamStimulus.duty);
+      return Math.sin((2 * Math.PI * t) / period) - threshold > 0 ? streamStimulus.A : 0;
+    }
+
+    function drawStimulusGraph(t = 0) {
+      const canvas = els.stimulusGraph;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(320, Math.round(rect.width * dpr));
+      const height = Math.max(72, Math.round(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#f8fbfd";
+      ctx.fillRect(0, 0, width, height);
+
+      const padL = 34 * dpr, padR = 12 * dpr, padT = 10 * dpr, padB = 18 * dpr;
+      const plotW = width - padL - padR;
+      const plotH = height - padT - padB;
+      const windowMs = 500;
+      const start = t - windowMs;
+      const samples = Math.max(80, Math.round(plotW));
+      const maxA = Math.max(0.001, streamStimulus.A);
+      const xFor = (i) => padL + (i / (samples - 1)) * plotW;
+      const yFor = (value) => padT + (1 - value / maxA) * plotH;
+
+      ctx.strokeStyle = "#dbe7ef";
+      ctx.lineWidth = 1 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i <= 4; i++) {
+        const x = padL + (i / 4) * plotW;
+        ctx.moveTo(x, padT);
+        ctx.lineTo(x, padT + plotH);
+      }
+      ctx.moveTo(padL, padT + plotH);
+      ctx.lineTo(padL + plotW, padT + plotH);
+      ctx.stroke();
+
+      ctx.strokeStyle = "#009eaa";
+      ctx.lineWidth = 2.2 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i < samples; i++) {
+        const sampleT = start + (i / (samples - 1)) * windowMs;
+        const x = xFor(i);
+        const y = yFor(strobeValue(sampleT));
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      ctx.strokeStyle = "#f3b33d";
+      ctx.lineWidth = 1.4 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(padL + plotW, padT - 2 * dpr);
+      ctx.lineTo(padL + plotW, padT + plotH + 2 * dpr);
+      ctx.stroke();
+
+      ctx.fillStyle = "#607284";
+      ctx.font = `${10 * dpr}px IBM Plex Sans, sans-serif`;
+      ctx.fillText("-0.5 s", padL, height - 5 * dpr);
+      ctx.fillText("now", padL + plotW - 22 * dpr, height - 5 * dpr);
+      els.stimulusInfo.textContent = `A=${streamStimulus.A.toFixed(2)}, T=${streamStimulus.period.toFixed(1)} ms, duty=${streamStimulus.duty.toFixed(1)}%`;
+    }
+
     function drawCurrentFrame() {
       if (!lastDisplayFrame) return;
       drawCortical(
@@ -1700,6 +1919,15 @@ const APPLET_HTML = raw"""
       return params;
     }
 
+    function sendVisualizationUpdate() {
+      const fps = Math.max(1, Math.round(Number(els.fps.value) || 30));
+      const speed = Math.max(0, Number(els.speed.value) || 0);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(`visual:fps=${fps}&speed=${speed}`);
+        els.status.textContent = `Updated visualization: target ${fps} fps, speed ${speed === 0 ? "max" : `${speed}x`}. Simulation state preserved.`;
+      }
+    }
+
     function startStream() {
       stopStream();
       resetMetrics();
@@ -1721,10 +1949,14 @@ const APPLET_HTML = raw"""
       socket.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === "hello") {
-          els.gridN.textContent = String(msg.N);
           const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
           const coupling = msg.coupling === "overlap" ? `, overlap g=${msg.couplingStrength}` : msg.coupling === "no_connection" ? ", two hemispheres no connection" : "";
-          els.dtMetric.textContent = `${Number(msg.dt).toFixed(3)} ms`;
+          streamStimulus = {
+            A: Number(msg.A) || 0,
+            period: Number(msg.T) || 1,
+            duty: msg.dutyCycle === null ? Number(els.duty.value) || 50 : Number(msg.dutyCycle)
+          };
+          drawStimulusGraph(0);
           els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, ${duty}${coupling}.`;
           return;
         }
@@ -1748,14 +1980,14 @@ const APPLET_HTML = raw"""
         const retinalValues = decodeFrame(msg.retinalData || msg.data);
         const retinalRows = msg.retinalRows || msg.retinalN || msg.N;
         const retinalCols = msg.retinalCols || msg.retinalN || msg.N;
-        lastDisplayFrame = { values, rows, cols, retinalValues, retinalRows, retinalCols };
+        lastDisplayFrame = { values, rows, cols, retinalValues, retinalRows, retinalCols, t: msg.t };
         drawCurrentFrame();
         els.simTime.textContent = `${msg.t.toFixed(1)} ms`;
         els.streamFps.textContent = observedFps.toFixed(1);
         els.msStep.textContent = msg.msPerStep.toFixed(3);
         els.rtx.textContent = msg.realtimeX.toFixed(2);
-        els.gridN.textContent = String(msg.N);
         els.range.textContent = `${msg.min.toFixed(3)} to ${msg.max.toFixed(3)}`;
+        drawStimulusGraph(msg.t);
       };
 
       socket.onclose = () => {
@@ -1808,6 +2040,8 @@ const APPLET_HTML = raw"""
 
     els.pausePlay.addEventListener("click", togglePausePlay);
     els.reset.addEventListener("click", resetStream);
+    els.fps.addEventListener("input", sendVisualizationUpdate);
+    els.speed.addEventListener("change", sendVisualizationUpdate);
     els.colorMap.addEventListener("change", () => {
       updateLegend();
       drawCurrentFrame();
@@ -1815,16 +2049,23 @@ const APPLET_HTML = raw"""
     document.addEventListener("keydown", (event) => {
       const active = document.activeElement;
       const tag = active?.tagName;
-      const isTyping = active?.isContentEditable || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
-      if (event.code === "Space" && !event.repeat && !isTyping) {
+      const isTextEntry = active?.isContentEditable || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
+      if (event.code === "Space" && !event.repeat && !isTextEntry) {
         event.preventDefault();
         togglePausePlay();
+      }
+      if (event.code === "Enter" && !event.repeat && tag !== "TEXTAREA" && !active?.isContentEditable) {
+        event.preventDefault();
+        resetStream();
       }
     });
     [
       els.n, els.kernelCutoff, els.se, els.si
     ].forEach((el) => el.addEventListener("input", drawKernelGraph));
-    window.addEventListener("resize", drawKernelGraph);
+    window.addEventListener("resize", () => {
+      drawKernelGraph();
+      drawStimulusGraph(lastDisplayFrame?.t || 0);
+    });
     drawKernelGraph();
     updateLegend();
     startStream();

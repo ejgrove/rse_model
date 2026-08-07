@@ -366,6 +366,12 @@ end
     ))
     @test legacy_config.boundary_x == :edge
     @test legacy_config.boundary_y == :edge
+
+    runtime = RSEModel.LiveRuntime()
+    @test RSEModel._apply_visual_control!(runtime, "visual:fps=12&speed=0.5")
+    @test runtime.target_fps == 12
+    @test runtime.speed == 0.5
+    @test !RSEModel._apply_visual_control!(runtime, "pause")
 end
 
 @testset "live applet server" begin
@@ -375,7 +381,8 @@ end
         response = HTTP.get(url; status_exception=false)
         body = String(response.body)
         @test response.status == 200
-        @test occursin("RSE Real-Time Viewer", body)
+        @test occursin("Real-time Strobe Hallucination Simulator", body)
+        @test occursin("Rule-Ermentrout-Stroffegen", body)
         @test occursin("id=\"dt\"", body)
         @test occursin("value=\"no_connection\"", body)
         @test occursin("value=\"overlap\"", body)
@@ -383,7 +390,11 @@ end
         @test occursin("retinal-angle-90", body)
         @test occursin("id=\"colorMap\"", body)
         @test occursin("nipy_spectral", body)
+        @test occursin("id=\"stimulusGraph\"", body)
         @test occursin("event.code === \"Space\"", body)
+        @test occursin("event.code === \"Enter\"", body)
+        @test !occursin("id=\"dtMetric\"", body)
+        @test !occursin("id=\"gridN\"", body)
 
         address = "127.0.0.1:$(HTTP.port(server))"
         HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1") do ws
