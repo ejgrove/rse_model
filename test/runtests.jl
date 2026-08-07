@@ -55,6 +55,17 @@ end
     @test right_i[4, 1] == 4.0f0
 end
 
+@testset "coupled live view orientation" begin
+    left = reshape(collect(Float32, 1:9), 3, 3)
+    right = reshape(collect(Float32, 10:18), 3, 3)
+    display = Matrix{Float32}(undef, 3, 6)
+
+    RSEModel._fill_coupled_views!(display, left, right)
+
+    @test display[:, 1:3] == left
+    @test display[:, 4:6] == right
+end
+
 @testset "short simulation" begin
     data = run_simulation(
         N=25,
