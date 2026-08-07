@@ -20,19 +20,20 @@ function _gridwrap_bilinear(img::AbstractMatrix, y::T, x::T) where {T<:AbstractF
            dy * ((one(T) - dx) * v10 + dx * v11)
 end
 
-function retinal_transform(input_img::AbstractMatrix; output_size=size(input_img))
+function retinal_transform(input_img::AbstractMatrix; output_size=size(input_img), angle_origin=0)
     source_height, source_width = size(input_img)
     height, width = output_size
     T = eltype(input_img)
     output = Matrix{T}(undef, height, width)
+    angle_origin_t = T(angle_origin)
 
     for col in 1:width, row in 1:height
         x = T(-1) + T(2) * T(col - 1) / T(max(width - 1, 1))
-        y = T(-1) + T(2) * T(row - 1) / T(max(height - 1, 1))
+        y = T(1) - T(2) * T(row - 1) / T(max(height - 1, 1))
         r = hypot(x, y)
         theta = mod(atan(y, x) + T(2pi), T(2pi))
         r_scaled = log(r + T(1e-26)) / T(2pi)
-        theta_scaled = theta / T(2pi)
+        theta_scaled = mod(theta - angle_origin_t, T(2pi)) / T(2pi)
         # Cortical rows encode polar angle; cortical columns encode radius/eccentricity.
         x_in = r_scaled * T(source_width)
         y_in = theta_scaled * T(source_height)

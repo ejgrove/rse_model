@@ -59,11 +59,15 @@ end
     left = reshape(collect(Float32, 1:9), 3, 3)
     right = reshape(collect(Float32, 10:18), 3, 3)
     display = Matrix{Float32}(undef, 3, 6)
+    retinal_source = Matrix{Float32}(undef, 6, 3)
 
     RSEModel._fill_coupled_views!(display, left, right)
+    RSEModel._fill_coupled_retinal_source!(retinal_source, left, right)
 
     @test display[:, 1:3] == left
     @test display[:, 4:6] == right
+    @test retinal_source[1:3, :] == left
+    @test retinal_source[4:6, :] == reverse(right; dims=1)
 end
 
 @testset "short simulation" begin
@@ -228,6 +232,10 @@ end
     angle_ret = retinal_transform(angle_by_row; output_size=(3, 3))
     @test angle_ret[2, 3] ≈ 1.0f0
     @test angle_ret[2, 1] ≈ 5.0f0
+
+    offset_ret = retinal_transform(angle_by_row; output_size=(3, 3), angle_origin=Float32(pi / 2))
+    @test offset_ret[1, 2] ≈ 1.0f0
+    @test offset_ret[3, 2] ≈ 5.0f0
 end
 
 @testset "parameter search smoke" begin

@@ -265,6 +265,15 @@ function _fill_coupled_views!(display, left_activity, right_activity)
     return display
 end
 
+function _fill_coupled_retinal_source!(retinal_source, left_activity, right_activity)
+    rows, cols = size(left_activity)
+    @inbounds for col in 1:cols, row in 1:rows
+        retinal_source[row, col] = left_activity[row, col]
+        retinal_source[rows + row, col] = right_activity[rows - row + 1, col]
+    end
+    return retinal_source
+end
+
 function _throttle!(stream_start_ns::UInt64, config::LiveConfig, sim_elapsed_ms::Float64)
     config.speed <= 0 && return
     target_elapsed = sim_elapsed_ms / (1000 * config.speed)
@@ -352,6 +361,7 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
     activity_left = similar(Ue_left)
     activity_right = similar(Ue_right)
     display_activity = Matrix{Float32}(undef, N, 2N)
+    retinal_source = Matrix{Float32}(undef, 2N, N)
 
     steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
@@ -410,7 +420,8 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
         @. activity_left = abs(Ue_left - Ui_left)
         @. activity_right = abs(Ue_right - Ui_right)
         _fill_coupled_views!(display_activity, activity_left, activity_right)
-        retinal_activity = retinal_transform(display_activity; output_size=(N, N))
+        _fill_coupled_retinal_source!(retinal_source, activity_left, activity_right)
+        retinal_activity = retinal_transform(retinal_source; output_size=(N, N), angle_origin=Float32(pi / 2))
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -560,6 +571,7 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
     activity_left_gpu = similar(Ue_left)
     activity_right_gpu = similar(Ue_right)
     display_activity = Matrix{Float32}(undef, N, 2N)
+    retinal_source = Matrix{Float32}(undef, 2N, N)
 
     steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
@@ -671,7 +683,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
         activity_left = Array(activity_left_gpu)
         activity_right = Array(activity_right_gpu)
         _fill_coupled_views!(display_activity, activity_left, activity_right)
-        retinal_activity = retinal_transform(display_activity; output_size=(N, N))
+        _fill_coupled_retinal_source!(retinal_source, activity_left, activity_right)
+        retinal_activity = retinal_transform(retinal_source; output_size=(N, N), angle_origin=Float32(pi / 2))
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
