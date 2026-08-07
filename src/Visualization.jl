@@ -20,8 +20,9 @@ function _gridwrap_bilinear(img::AbstractMatrix, y::T, x::T) where {T<:AbstractF
            dy * ((one(T) - dx) * v10 + dx * v11)
 end
 
-function retinal_transform(input_img::AbstractMatrix)
-    height, width = size(input_img)
+function retinal_transform(input_img::AbstractMatrix; output_size=size(input_img))
+    source_height, source_width = size(input_img)
+    height, width = output_size
     T = eltype(input_img)
     output = Matrix{T}(undef, height, width)
 
@@ -32,8 +33,8 @@ function retinal_transform(input_img::AbstractMatrix)
         theta = mod(atan(y, x) + T(2pi), T(2pi))
         r_scaled = log(r + T(1e-26)) / T(2pi)
         theta_scaled = theta / T(2pi)
-        x_in = r_scaled * T(width)
-        y_in = theta_scaled * T(height)
+        x_in = r_scaled * T(source_width)
+        y_in = theta_scaled * T(source_height)
         output[row, col] = _gridwrap_bilinear(input_img, y_in, x_in)
     end
 

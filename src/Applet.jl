@@ -60,8 +60,7 @@ function normalize_live_config(config::LiveConfig)
     backend == :metal || convolution == :fft ||
         throw(ArgumentError("The CPU live backend currently supports FFT convolution only."))
     _validate_boundaries(boundary_x, boundary_y, convolution, backend)
-    coupling = config.coupling
-    coupling in (:none, :midline) || throw(ArgumentError("coupling must be :none or :midline."))
+    coupling = _normalize_live_coupling(config.coupling)
 
     target_fps = max(1, config.target_fps)
     N = config.fast_n ? next_fast_odd_size(config.N) : odd_positive_int(config.N)
@@ -102,6 +101,21 @@ function normalize_live_config(config::LiveConfig)
         overlap_rows=overlap_rows,
         max_frames=config.max_frames,
     )
+end
+
+function _normalize_live_coupling(coupling::Symbol)
+    coupling == :none && return :off
+    coupling == :midline && return :overlap
+    coupling in (:off, :no_connection, :overlap) && return coupling
+    throw(ArgumentError("coupling must be :off, :no_connection, or :overlap."))
+end
+
+function _uses_two_hemispheres(config::LiveConfig)
+    return config.coupling in (:no_connection, :overlap)
+end
+
+function _uses_overlap_coupling(config::LiveConfig)
+    return config.coupling == :overlap && config.coupling_strength > 0
 end
 
 function _parse_bool(value::AbstractString, default::Bool)
@@ -242,13 +256,28 @@ function _make_live_frame(
     )
 end
 
-function _fill_coupled_views!(display, left_activity, right_activity)
-    rows, cols = size(left_activity)
+function _rotate_cortical_view(activity::AbstractMatrix)
+    rows, cols = size(activity)
+    rotated = Matrix{eltype(activity)}(undef, cols, rows)
+    _copy_rotated_cortical!(rotated, activity)
+    return rotated
+end
+
+function _copy_rotated_cortical!(dest, source; row_offset::Integer=0, col_offset::Integer=0)
+    rows, cols = size(source)
     @inbounds for col in 1:cols, row in 1:rows
-        display[row, col] = left_activity[row, col]
-        display[row, cols + col] = right_activity[row, col]
+        dest[row_offset + col, col_offset + rows - row + 1] = source[row, col]
     end
-    return display
+    return dest
+end
+
+function _fill_coupled_views!(display, retinal_source, left_activity, right_activity)
+    rows, cols = size(left_activity)
+    _copy_rotated_cortical!(display, left_activity)
+    _copy_rotated_cortical!(display, right_activity; col_offset=rows)
+    _copy_rotated_cortical!(retinal_source, left_activity)
+    _copy_rotated_cortical!(retinal_source, right_activity; row_offset=cols)
+    return display, retinal_source
 end
 
 function _throttle!(stream_start_ns::UInt64, config::LiveConfig, sim_elapsed_ms::Float64)
@@ -261,7 +290,7 @@ function _throttle!(stream_start_ns::UInt64, config::LiveConfig, sim_elapsed_ms:
 end
 
 function _stream_cpu_frames(callback::Function, config::LiveConfig)
-    config.coupling == :midline && return _stream_cpu_coupled_frames(callback, config)
+    _uses_two_hemispheres(config) && return _stream_cpu_coupled_frames(callback, config)
     p = _live_model_params(config)
     rng = _rng(config.seed)
     Ue = rand(rng, Float32, config.N, config.N)
@@ -303,7 +332,7 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig)
             step_idx += 1
         end
         step_ms = (time_ns() - step_start) / 1e6
-        activity = abs.(Ue .- Ui)
+        activity = _rotate_cortical_view(abs.(Ue .- Ui))
         retinal_activity = retinal_transform(activity)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
@@ -338,6 +367,7 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
     activity_left = similar(Ue_left)
     activity_right = similar(Ue_right)
     display_activity = Matrix{Float32}(undef, N, 2N)
+    retinal_source = Matrix{Float32}(undef, 2N, N)
 
     steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
@@ -380,21 +410,23 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
                 p,
                 config.duty_cycle_percent,
             )
-            _apply_midline_coupling!(
-                Ue_left,
-                Ui_left,
-                Ue_right,
-                Ui_right,
-                config.coupling_strength,
-                config.overlap_rows,
-            )
+            if _uses_overlap_coupling(config)
+                _apply_midline_coupling!(
+                    Ue_left,
+                    Ui_left,
+                    Ue_right,
+                    Ui_right,
+                    config.coupling_strength,
+                    config.overlap_rows,
+                )
+            end
             step_idx += 1
         end
         step_ms = (time_ns() - step_start) / 1e6
         @. activity_left = abs(Ue_left - Ui_left)
         @. activity_right = abs(Ue_right - Ui_right)
-        _fill_coupled_views!(display_activity, activity_left, activity_right)
-        retinal_activity = retinal_transform(display_activity)
+        _fill_coupled_views!(display_activity, retinal_source, activity_left, activity_right)
+        retinal_activity = retinal_transform(retinal_source; output_size=(N, N))
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -414,7 +446,7 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig)
 end
 
 function _stream_metal_frames(callback::Function, config::LiveConfig)
-    config.coupling == :midline && return _stream_metal_coupled_frames(callback, config)
+    _uses_two_hemispheres(config) && return _stream_metal_coupled_frames(callback, config)
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     p = _live_model_params(config)
     config.seed === nothing || Metal.seed!(config.seed)
@@ -497,7 +529,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig)
 
         cortical_gpu .= abs.(Ue .- Ui)
         Metal.synchronize()
-        activity = Array(cortical_gpu)
+        activity = _rotate_cortical_view(Array(cortical_gpu))
         retinal_activity = retinal_transform(activity)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
@@ -544,6 +576,7 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
     activity_left_gpu = similar(Ue_left)
     activity_right_gpu = similar(Ue_right)
     display_activity = Matrix{Float32}(undef, N, 2N)
+    retinal_source = Matrix{Float32}(undef, 2N, N)
 
     steps_per_frame = _steps_per_frame(config, p)
     stream_start = time_ns()
@@ -633,15 +666,17 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
                 )
             end
 
-            apply_midline_coupling!(
-                Ue_left,
-                Ui_left,
-                Ue_right,
-                Ui_right;
-                strength=config.coupling_strength,
-                overlap_rows=config.overlap_rows,
-                gpu_threads=config.gpu_threads,
-            )
+            if _uses_overlap_coupling(config)
+                apply_midline_coupling!(
+                    Ue_left,
+                    Ui_left,
+                    Ue_right,
+                    Ui_right;
+                    strength=config.coupling_strength,
+                    overlap_rows=config.overlap_rows,
+                    gpu_threads=config.gpu_threads,
+                )
+            end
             step_idx += 1
         end
         Metal.synchronize()
@@ -652,8 +687,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig)
         Metal.synchronize()
         activity_left = Array(activity_left_gpu)
         activity_right = Array(activity_right_gpu)
-        _fill_coupled_views!(display_activity, activity_left, activity_right)
-        retinal_activity = retinal_transform(display_activity)
+        _fill_coupled_views!(display_activity, retinal_source, activity_left, activity_right)
+        retinal_activity = retinal_transform(retinal_source; output_size=(N, N))
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -1171,7 +1206,7 @@ const APPLET_HTML = raw"""
         <label>Convolution<select id="conv"><option value="auto">auto</option><option value="separable">separable</option><option value="fft">fft</option></select></label>
         <label>Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
         <label>Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
-        <label>Coupling<select id="coupling"><option value="none">none</option><option value="midline">midline</option></select></label>
+        <label>Coupling<select id="coupling"><option value="off">off</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
         <label>Speed<select id="speed"><option value="1">1x real time</option><option value="0.5">0.5x</option><option value="2">2x</option><option value="0">max</option></select></label>
         <label>A<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
         <label>T (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
@@ -1463,7 +1498,7 @@ const APPLET_HTML = raw"""
         if (msg.type === "hello") {
           els.gridN.textContent = String(msg.N);
           const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
-          const coupling = msg.coupling === "midline" ? `, midline g=${msg.couplingStrength}` : "";
+          const coupling = msg.coupling === "overlap" ? `, overlap g=${msg.couplingStrength}` : msg.coupling === "no_connection" ? ", two hemispheres no connection" : "";
           els.dtMetric.textContent = `${Number(msg.dt).toFixed(3)} ms`;
           els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, ${duty}${coupling}.`;
           return;

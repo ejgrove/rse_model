@@ -210,6 +210,8 @@ end
     wide_img = reshape(collect(Float32, 1:50), 5, 10)
     wide_ret = retinal_transform(wide_img)
     @test size(wide_ret) == size(wide_img)
+    square_from_wide = retinal_transform(wide_img; output_size=(5, 5))
+    @test size(square_from_wide) == (5, 5)
 end
 
 @testset "parameter search smoke" begin
@@ -323,9 +325,15 @@ end
     @test config.dt == 0.1f0
     @test config.boundary_x == :edge
     @test config.boundary_y == :zero
-    @test config.coupling == :midline
+    @test config.coupling == :overlap
     @test config.coupling_strength == 0.03f0
     @test config.overlap_rows == 6
+
+    disconnected_config = live_config_from_query(Dict(
+        "backend" => "metal",
+        "coupling" => "no_connection",
+    ))
+    @test disconnected_config.coupling == :no_connection
 
     legacy_config = live_config_from_query(Dict(
         "backend" => "metal",
@@ -345,20 +353,22 @@ end
         @test response.status == 200
         @test occursin("RSE Real-Time Viewer", body)
         @test occursin("id=\"dt\"", body)
+        @test occursin("value=\"no_connection\"", body)
+        @test occursin("value=\"overlap\"", body)
 
         address = "127.0.0.1:$(HTTP.port(server))"
-        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=midline&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1") do ws
+        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1") do ws
             hello = String(HTTP.WebSockets.receive(ws))
             frame = String(HTTP.WebSockets.receive(ws))
             @test occursin("\"type\":\"hello\"", hello)
             @test occursin("\"type\":\"frame\"", frame)
-            @test occursin("\"coupling\":\"midline\"", hello)
+            @test occursin("\"coupling\":\"overlap\"", hello)
             @test occursin("\"Se\":1.5", hello)
             @test occursin("\"Si\":4.5", hello)
             @test occursin("\"dt\":0.1", hello)
             @test occursin("\"cols\":50", frame)
             @test occursin("\"retinalRows\":25", frame)
-            @test occursin("\"retinalCols\":50", frame)
+            @test occursin("\"retinalCols\":25", frame)
         end
     finally
         close(server)
