@@ -1209,6 +1209,7 @@ const APPLET_HTML = raw"""
     .cortical-frame {
       --left-center: 50%;
       --right-center: 50%;
+      padding-top: 76px;
     }
 
     .hemi-left,
@@ -1231,7 +1232,7 @@ const APPLET_HTML = raw"""
 
     .axis-top-left,
     .axis-top-right {
-      top: 33px;
+      top: 50px;
     }
 
     .axis-bottom-left,
