@@ -49,6 +49,8 @@ end
 Base.@kwdef mutable struct LiveRuntime
     target_fps::Int = 30
     speed::Float64 = 1.0
+    throttle_deadline_ns::UInt64 = 0
+    control_version::Int = 0
 end
 
 function normalize_live_config(config::LiveConfig)
@@ -287,17 +289,47 @@ function _fill_coupled_retinal_source!(retinal_source, left_activity, right_acti
     return retinal_source
 end
 
-function _throttle!(stream_start_ns::UInt64, speed::Real, sim_elapsed_ms::Float64)
-    speed <= 0 && return
-    target_elapsed = sim_elapsed_ms / (1000 * speed)
-    actual_elapsed = (time_ns() - stream_start_ns) / 1e9
-    delay = target_elapsed - actual_elapsed
-    delay > 0.001 && sleep(delay)
+function _reset_throttle!(runtime::LiveRuntime)
+    runtime.throttle_deadline_ns = 0
     return
 end
 
-function _throttle!(stream_start_ns::UInt64, config::LiveConfig, sim_elapsed_ms::Float64)
-    return _throttle!(stream_start_ns, config.speed, sim_elapsed_ms)
+function _throttle!(runtime::LiveRuntime, frame_start_ns::UInt64, frame_sim_ms::Float64)
+    yield()
+    speed = runtime.speed
+    if speed <= 0
+        _reset_throttle!(runtime)
+        return
+    end
+
+    interval_ns = UInt64(max(0, round(Int, frame_sim_ms * 1e6 / speed)))
+    now_ns = time_ns()
+    previous_deadline = runtime.throttle_deadline_ns
+    deadline_ns = if previous_deadline == 0 || now_ns > previous_deadline + max(interval_ns, UInt64(50_000_000))
+        frame_start_ns + interval_ns
+    else
+        previous_deadline + interval_ns
+    end
+
+    if deadline_ns <= now_ns
+        runtime.throttle_deadline_ns = now_ns
+        return
+    end
+
+    version = runtime.control_version
+    while true
+        now_ns = time_ns()
+        remaining_ns = deadline_ns > now_ns ? deadline_ns - now_ns : UInt64(0)
+        remaining_ns <= 1_000_000 && break
+        runtime.control_version == version || begin
+            runtime.throttle_deadline_ns = time_ns()
+            return
+        end
+        sleep(min(Float64(remaining_ns) / 1e9, 0.05))
+    end
+
+    runtime.throttle_deadline_ns = deadline_ns
+    return
 end
 
 function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::LiveRuntime)
@@ -314,7 +346,6 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::Liv
     Uic = similar(Ui)
     noise = Array{Float32}(undef, 2, config.N, config.N)
 
-    stream_start = time_ns()
     step_idx = 0
     frame_idx = 0
 
@@ -348,7 +379,7 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::Liv
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
         callback(frame) === false && break
-        _throttle!(stream_start, runtime.speed, Float64(step_idx) * Float64(p.dt))
+        _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
     end
 
     return frame_idx
@@ -380,7 +411,6 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
     display_activity = Matrix{Float32}(undef, N, 2N)
     retinal_source = Matrix{Float32}(undef, 2N, N)
 
-    stream_start = time_ns()
     step_idx = 0
     frame_idx = 0
 
@@ -451,7 +481,7 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
             retinal_activity,
         )
         callback(frame) === false && break
-        _throttle!(stream_start, runtime.speed, Float64(step_idx) * Float64(p.dt))
+        _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
     end
 
     return frame_idx
@@ -484,7 +514,6 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
     noise_I = similar(Ui)
     cortical_gpu = similar(Ue)
 
-    stream_start = time_ns()
     step_idx = 0
     frame_idx = 0
 
@@ -546,7 +575,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
         callback(frame) === false && break
-        _throttle!(stream_start, runtime.speed, Float64(step_idx) * Float64(p.dt))
+        _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
     end
 
     return frame_idx
@@ -590,7 +619,6 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
     display_activity = Matrix{Float32}(undef, N, 2N)
     retinal_source = Matrix{Float32}(undef, 2N, N)
 
-    stream_start = time_ns()
     step_idx = 0
     frame_idx = 0
 
@@ -714,7 +742,7 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
             retinal_activity,
         )
         callback(frame) === false && break
-        _throttle!(stream_start, runtime.speed, Float64(step_idx) * Float64(p.dt))
+        _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
     end
 
     return frame_idx
@@ -832,10 +860,17 @@ function _apply_visual_control!(runtime::LiveRuntime, message::AbstractString)
         key, value = pieces
         try
             if key == "fps"
-                runtime.target_fps = max(1, parse(Int, value))
+                next_fps = max(1, parse(Int, value))
+                if next_fps != runtime.target_fps
+                    runtime.target_fps = next_fps
+                    runtime.control_version += 1
+                end
             elseif key == "speed"
                 speed = parse(Float64, value)
-                speed >= 0 && (runtime.speed = speed)
+                if speed >= 0 && speed != runtime.speed
+                    runtime.speed = speed
+                    runtime.control_version += 1
+                end
             end
         catch
             continue
@@ -854,8 +889,12 @@ function _stream_websocket(ws, params)
             message = String(HTTP.WebSockets.receive(ws))
             if message == "pause"
                 paused[] = true
+                runtime.control_version += 1
+                _reset_throttle!(runtime)
             elseif message == "play"
                 paused[] = false
+                runtime.control_version += 1
+                _reset_throttle!(runtime)
             elseif message == "close"
                 closed[] = true
                 break
@@ -1185,13 +1224,14 @@ const APPLET_HTML = raw"""
       padding: 5px 8px;
       min-width: 0;
       height: 38px;
-      display: grid;
-      align-content: center;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
       box-shadow: var(--soft-shadow);
     }
 
     .metric span {
-      display: block;
       color: var(--muted);
       font-size: 8.5px;
       letter-spacing: 0.14em;
@@ -1202,11 +1242,10 @@ const APPLET_HTML = raw"""
     }
 
     .metric strong {
-      display: block;
-      margin-top: 2px;
-      font-size: clamp(12px, 1.15vw, 16px);
+      font-size: clamp(12px, 1vw, 15px);
       letter-spacing: -0.045em;
       white-space: nowrap;
+      text-align: right;
     }
 
     .views {
@@ -1589,7 +1628,11 @@ const APPLET_HTML = raw"""
     let resetting = false;
     let streamToken = 0;
     let lastFrameAt = performance.now();
+    let lastRateFrameAt = null;
+    let lastRateSimTime = null;
     let lastDisplayFrame = null;
+    let visualizationUpdateTimer = null;
+    let resetFallbackTimer = null;
     let streamStimulus = {
       A: Number(els.amp.value) || 0,
       period: Number(els.period.value) || 1,
@@ -1710,6 +1753,8 @@ const APPLET_HTML = raw"""
       els.msStep.textContent = "0";
       els.rtx.textContent = "0";
       els.range.textContent = "range -";
+      lastRateFrameAt = null;
+      lastRateSimTime = null;
       drawStimulusGraph(0);
     }
 
@@ -1834,7 +1879,8 @@ const APPLET_HTML = raw"""
       const plotW = width - padL - padR;
       const plotH = height - padT - padB;
       const windowMs = 500;
-      const start = t - windowMs;
+      const halfWindowMs = windowMs / 2;
+      const start = t - halfWindowMs;
       const samples = Math.max(80, Math.round(plotW));
       const maxA = Math.max(0.001, streamStimulus.A);
       const xFor = (i) => padL + (i / (samples - 1)) * plotW;
@@ -1866,15 +1912,21 @@ const APPLET_HTML = raw"""
 
       ctx.strokeStyle = "#f3b33d";
       ctx.lineWidth = 1.4 * dpr;
+      const nowX = padL + plotW / 2;
       ctx.beginPath();
-      ctx.moveTo(padL + plotW, padT - 2 * dpr);
-      ctx.lineTo(padL + plotW, padT + plotH + 2 * dpr);
+      ctx.moveTo(nowX, padT - 2 * dpr);
+      ctx.lineTo(nowX, padT + plotH + 2 * dpr);
       ctx.stroke();
 
       ctx.fillStyle = "#607284";
       ctx.font = `${10 * dpr}px IBM Plex Sans, sans-serif`;
-      ctx.fillText("-0.5 s", padL, height - 5 * dpr);
-      ctx.fillText("now", padL + plotW - 22 * dpr, height - 5 * dpr);
+      ctx.textAlign = "left";
+      ctx.fillText("-0.25 s", padL, height - 5 * dpr);
+      ctx.textAlign = "center";
+      ctx.fillText("now", nowX, height - 5 * dpr);
+      ctx.textAlign = "right";
+      ctx.fillText("+0.25 s", padL + plotW, height - 5 * dpr);
+      ctx.textAlign = "left";
       els.stimulusInfo.textContent = `A=${streamStimulus.A.toFixed(2)}, T=${streamStimulus.period.toFixed(1)} ms, duty=${streamStimulus.duty.toFixed(1)}%`;
     }
 
@@ -1926,12 +1978,18 @@ const APPLET_HTML = raw"""
     }
 
     function sendVisualizationUpdate() {
+      visualizationUpdateTimer = null;
       const fps = Math.max(1, Math.round(Number(els.fps.value) || 30));
       const speed = Math.max(0, Number(els.speed.value) || 0);
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(`visual:fps=${fps}&speed=${speed}`);
-        els.status.textContent = `Updated visualization: target ${fps} fps, speed ${speed === 0 ? "max" : `${speed}x`}. Simulation state preserved.`;
+        els.status.textContent = `Updated visualization: target ${fps} fps, target speed ${speed === 0 ? "max" : `${speed}x`}. Simulation state preserved.`;
       }
+    }
+
+    function queueVisualizationUpdate(delayMs = 120) {
+      if (visualizationUpdateTimer) clearTimeout(visualizationUpdateTimer);
+      visualizationUpdateTimer = setTimeout(sendVisualizationUpdate, delayMs);
     }
 
     function startStream() {
@@ -1944,15 +2002,18 @@ const APPLET_HTML = raw"""
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const url = `${protocol}//${location.host}/stream?${streamParams().toString()}`;
       socket = new WebSocket(url);
+      const currentSocket = socket;
       const token = ++streamToken;
       els.status.textContent = "Connecting...";
       lastFrameAt = performance.now();
 
       socket.onopen = () => {
+        if (token !== streamToken || socket !== currentSocket) return;
         els.status.textContent = "Streaming. Use Pause to hold the current state or Reset to restart with new parameters.";
       };
 
       socket.onmessage = (event) => {
+        if (token !== streamToken || socket !== currentSocket) return;
         const msg = JSON.parse(event.data);
         if (msg.type === "hello") {
           const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
@@ -1963,7 +2024,8 @@ const APPLET_HTML = raw"""
             duty: msg.dutyCycle === null ? Number(els.duty.value) || 50 : Number(msg.dutyCycle)
           };
           drawStimulusGraph(0);
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, ${duty}${coupling}.`;
+          const speedText = msg.speed === 0 ? "max speed" : `${msg.speed}x speed`;
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {
@@ -1979,7 +2041,13 @@ const APPLET_HTML = raw"""
 
         const now = performance.now();
         const observedFps = 1000 / Math.max(1, now - lastFrameAt);
+        const actualRealtimeX =
+          lastRateFrameAt === null || lastRateSimTime === null
+            ? 0
+            : (msg.t - lastRateSimTime) / Math.max(1, now - lastRateFrameAt);
         lastFrameAt = now;
+        lastRateFrameAt = now;
+        lastRateSimTime = msg.t;
         const values = decodeFrame(msg.data);
         const rows = msg.rows || msg.N;
         const cols = msg.cols || msg.N;
@@ -1991,7 +2059,7 @@ const APPLET_HTML = raw"""
         els.simTime.textContent = `${msg.t.toFixed(1)} ms`;
         els.streamFps.textContent = observedFps.toFixed(1);
         els.msStep.textContent = msg.msPerStep.toFixed(3);
-        els.rtx.textContent = msg.realtimeX.toFixed(2);
+        els.rtx.textContent = actualRealtimeX.toFixed(2);
         els.range.textContent = `${msg.min.toFixed(3)} to ${msg.max.toFixed(3)}`;
         drawStimulusGraph(msg.t);
       };
@@ -2002,30 +2070,56 @@ const APPLET_HTML = raw"""
           els.status.textContent = "Paused/disconnected. Press Play to start a stream.";
           setPauseUi(true);
         }
-        socket = null;
+        if (socket === currentSocket) socket = null;
       };
 
       socket.onerror = () => {
+        if (token !== streamToken || socket !== currentSocket) return;
         els.status.textContent = "Stream error. Check the Julia terminal for details.";
       };
     }
 
     function stopStream() {
-      if (socket) {
-        try { socket.send("close"); } catch (_) {}
-        socket.close();
-        socket = null;
-      }
+      if (!socket) return null;
+      const closingSocket = socket;
+      socket = null;
+      try { closingSocket.send("close"); } catch (_) {}
+      try { closingSocket.close(); } catch (_) {}
+      return closingSocket;
     }
 
     function resetStream() {
+      if (resetFallbackTimer) clearTimeout(resetFallbackTimer);
       resetting = true;
-      stopStream();
       resetMetrics();
-      setTimeout(() => {
+      setPauseUi(false);
+      els.status.textContent = "Resetting stream...";
+
+      const closingSocket = socket;
+      if (!closingSocket || closingSocket.readyState === WebSocket.CLOSED) {
         resetting = false;
         startStream();
-      }, 60);
+        return;
+      }
+
+      socket = null;
+      streamToken += 1;
+      let restarted = false;
+      const restart = () => {
+        if (restarted) return;
+        restarted = true;
+        if (resetFallbackTimer) clearTimeout(resetFallbackTimer);
+        resetFallbackTimer = null;
+        resetting = false;
+        startStream();
+      };
+
+      closingSocket.onmessage = () => {};
+      closingSocket.onclose = restart;
+      closingSocket.onerror = restart;
+      try { closingSocket.send("close"); } catch (_) {}
+      try { closingSocket.close(); } catch (_) { restart(); }
+      resetFallbackTimer = setTimeout(restart, 1200);
     }
 
     function togglePausePlay() {
@@ -2046,8 +2140,8 @@ const APPLET_HTML = raw"""
 
     els.pausePlay.addEventListener("click", togglePausePlay);
     els.reset.addEventListener("click", resetStream);
-    els.fps.addEventListener("input", sendVisualizationUpdate);
-    els.speed.addEventListener("change", sendVisualizationUpdate);
+    els.fps.addEventListener("input", () => queueVisualizationUpdate(160));
+    els.speed.addEventListener("change", () => queueVisualizationUpdate(0));
     els.colorMap.addEventListener("change", () => {
       updateLegend();
       drawCurrentFrame();
