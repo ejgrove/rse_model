@@ -912,8 +912,8 @@ const APPLET_HTML = raw"""
   <title>RSE Real-Time Viewer</title>
   <style>
     :root {
-      --bg: #f4f8fb;
-      --panel: rgba(255, 255, 255, 0.86);
+      --bg: #edf5f7;
+      --panel: rgba(255, 255, 255, 0.82);
       --panel-strong: #ffffff;
       --ink: #0d2638;
       --muted: #607284;
@@ -921,7 +921,10 @@ const APPLET_HTML = raw"""
       --accent-2: #f3b33d;
       --danger: #db4d54;
       --line: #dbe7ef;
-      --shadow: 0 24px 70px rgba(25, 56, 82, 0.14);
+      --line-strong: #c6d8e2;
+      --shadow: 0 24px 70px rgba(25, 56, 82, 0.13);
+      --soft-shadow: 0 14px 38px rgba(25, 56, 82, 0.08);
+      --legend-gradient: linear-gradient(90deg, #0d0887, #5403a0, #8b0aa5, #b93289, #db5c68, #f48849, #feba2c, #f0f921);
       font-family: "IBM Plex Sans", "Aptos", "Helvetica Neue", sans-serif;
     }
 
@@ -933,10 +936,11 @@ const APPLET_HTML = raw"""
       background:
         linear-gradient(rgba(13, 38, 56, 0.035) 1px, transparent 1px),
         linear-gradient(90deg, rgba(13, 38, 56, 0.035) 1px, transparent 1px),
-        radial-gradient(circle at 8% 12%, rgba(0, 158, 170, 0.16), transparent 34rem),
-        radial-gradient(circle at 92% 8%, rgba(243, 179, 61, 0.18), transparent 28rem),
-        linear-gradient(135deg, #f8fbfd 0%, #eef6f8 48%, #f9f5e9 100%);
-      background-size: 30px 30px, 30px 30px, auto, auto, auto;
+        radial-gradient(circle at 9% 10%, rgba(0, 158, 170, 0.19), transparent 32rem),
+        radial-gradient(circle at 84% 4%, rgba(243, 179, 61, 0.22), transparent 27rem),
+        radial-gradient(circle at 72% 88%, rgba(13, 38, 56, 0.08), transparent 38rem),
+        linear-gradient(135deg, #f8fbfd 0%, #eef7f8 45%, #f8f3e4 100%);
+      background-size: 30px 30px, 30px 30px, auto, auto, auto, auto;
     }
 
     main {
@@ -1002,7 +1006,7 @@ const APPLET_HTML = raw"""
 
     input, select, button {
       width: 100%;
-      border: 1px solid var(--line);
+      border: 1px solid var(--line-strong);
       border-radius: 14px;
       color: var(--ink);
       background: rgba(255, 255, 255, 0.74);
@@ -1067,31 +1071,33 @@ const APPLET_HTML = raw"""
     }
 
     .stage {
-      padding: 22px;
+      padding: 18px;
       display: grid;
-      gap: 18px;
+      gap: 14px;
       min-width: 0;
     }
 
     .metrics {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
     }
 
     .metric {
       border: 1px solid var(--line);
-      background: #ffffff;
-      border-radius: 18px;
-      padding: 12px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 251, 252, 0.92));
+      border-radius: 16px;
+      padding: 9px 10px;
       min-width: 0;
+      box-shadow: var(--soft-shadow);
     }
 
     .metric span {
       display: block;
       color: var(--muted);
-      font-size: 11px;
-      letter-spacing: 0.12em;
+      font-size: 9.5px;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
       white-space: nowrap;
       overflow: hidden;
@@ -1100,9 +1106,9 @@ const APPLET_HTML = raw"""
 
     .metric strong {
       display: block;
-      margin-top: 6px;
-      font-size: clamp(18px, 2.3vw, 30px);
-      letter-spacing: -0.05em;
+      margin-top: 4px;
+      font-size: clamp(14px, 1.6vw, 21px);
+      letter-spacing: -0.045em;
       white-space: nowrap;
     }
 
@@ -1116,9 +1122,11 @@ const APPLET_HTML = raw"""
     .view {
       border: 1px solid var(--line);
       border-radius: 24px;
-      background: #ffffff;
-      padding: 14px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(247, 251, 252, 0.96));
+      padding: 12px;
       min-width: 0;
+      box-shadow: var(--soft-shadow);
     }
 
     .view-head {
@@ -1155,9 +1163,12 @@ const APPLET_HTML = raw"""
 
     .canvas-frame {
       position: relative;
-      padding: 38px 34px 30px;
+      padding: 54px 44px 44px;
       border-radius: 22px;
-      background: #f8fbfd;
+      background:
+        radial-gradient(circle at 50% 18%, rgba(0, 158, 170, 0.07), transparent 16rem),
+        linear-gradient(180deg, #fbfdfe, #f3f8fa);
+      border: 1px solid rgba(198, 216, 226, 0.72);
     }
 
     .canvas-frame canvas {
@@ -1169,9 +1180,9 @@ const APPLET_HTML = raw"""
       position: absolute;
       z-index: 2;
       color: #33495c;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 800;
-      letter-spacing: 0.03em;
+      letter-spacing: 0.06em;
       line-height: 1;
       pointer-events: none;
       text-transform: uppercase;
@@ -1180,6 +1191,19 @@ const APPLET_HTML = raw"""
     .axis-label {
       color: #607284;
       font-variant-numeric: tabular-nums;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(198, 216, 226, 0.82);
+      border-radius: 999px;
+      padding: 4px 7px;
+      box-shadow: 0 6px 18px rgba(25, 56, 82, 0.07);
+    }
+
+    .hemi-label {
+      color: #0b3146;
+      background: rgba(231, 246, 248, 0.92);
+      border: 1px solid rgba(0, 158, 170, 0.18);
+      border-radius: 999px;
+      padding: 5px 8px;
     }
 
     .cortical-frame {
@@ -1202,17 +1226,17 @@ const APPLET_HTML = raw"""
     }
 
     .hemi-label {
-      top: 9px;
+      top: 12px;
     }
 
     .axis-top-left,
     .axis-top-right {
-      top: 24px;
+      top: 33px;
     }
 
     .axis-bottom-left,
     .axis-bottom-right {
-      bottom: 9px;
+      bottom: 13px;
     }
 
     .cortical-frame:not(.coupled) .hemi-right,
@@ -1222,25 +1246,25 @@ const APPLET_HTML = raw"""
     }
 
     .retinal-angle-90 {
-      top: 12px;
+      top: 14px;
       left: 50%;
       transform: translateX(-50%);
     }
 
     .retinal-angle-270 {
-      bottom: 12px;
+      bottom: 14px;
       left: 50%;
       transform: translateX(-50%);
     }
 
     .retinal-angle-0 {
-      right: 10px;
+      right: 12px;
       top: 50%;
       transform: translateY(-50%);
     }
 
     .retinal-angle-180 {
-      left: 10px;
+      left: 12px;
       top: 50%;
       transform: translateY(-50%);
     }
@@ -1269,14 +1293,15 @@ const APPLET_HTML = raw"""
     .legend {
       height: 10px;
       border-radius: 999px;
-      background: linear-gradient(90deg, #0d0887, #5403a0, #8b0aa5, #b93289, #db5c68, #f48849, #feba2c, #f0f921);
+      background: var(--legend-gradient);
       border: 1px solid var(--line);
+      box-shadow: var(--soft-shadow);
     }
 
     @media (max-width: 940px) {
       main { grid-template-columns: 1fr; padding: 18px; }
       .panel { position: static; }
-      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .views { grid-template-columns: 1fr; }
     }
   </style>
@@ -1302,6 +1327,7 @@ const APPLET_HTML = raw"""
         <label>Se<input id="se" type="number" min="0.1" step="0.05" value="2"></label>
         <label>Si<input id="si" type="number" min="0.1" step="0.05" value="5"></label>
         <label>dt (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
+        <label>Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
         <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
         <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
         <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
@@ -1353,15 +1379,21 @@ const APPLET_HTML = raw"""
           </div>
         </div>
       </div>
-      <div class="legend"></div>
+      <div id="legend" class="legend"></div>
     </section>
   </main>
 
   <script>
-    const stops = [
-      [13, 8, 135], [84, 3, 160], [139, 10, 165], [185, 50, 137],
-      [219, 92, 104], [244, 136, 73], [254, 188, 43], [240, 249, 33]
-    ];
+    const colorMaps = {
+      plasma: [[13, 8, 135], [84, 3, 160], [139, 10, 165], [185, 50, 137], [219, 92, 104], [244, 136, 73], [254, 188, 43], [240, 249, 33]],
+      viridis: [[68, 1, 84], [70, 50, 126], [54, 92, 141], [39, 127, 142], [31, 161, 136], [74, 193, 109], [160, 218, 57], [253, 231, 37]],
+      magma: [[0, 0, 4], [32, 16, 68], [79, 18, 123], [129, 37, 129], [181, 54, 122], [229, 80, 100], [252, 137, 97], [254, 194, 135], [252, 253, 191]],
+      inferno: [[0, 0, 4], [31, 12, 72], [85, 15, 109], [136, 34, 106], [186, 54, 85], [227, 89, 51], [249, 140, 10], [249, 201, 50], [252, 255, 164]],
+      cividis: [[0, 34, 78], [31, 59, 110], [61, 82, 128], [91, 105, 135], [121, 128, 137], [153, 153, 134], [188, 180, 120], [225, 210, 92], [255, 233, 69]],
+      turbo: [[48, 18, 59], [50, 101, 192], [34, 170, 224], [52, 221, 164], [172, 244, 68], [251, 221, 59], [252, 132, 34], [180, 34, 15], [122, 4, 3]],
+      nipy_spectral: [[0, 0, 0], [102, 0, 153], [0, 0, 205], [0, 148, 255], [0, 180, 0], [255, 238, 0], [255, 128, 0], [210, 0, 0], [255, 255, 255]],
+      gray: [[0, 0, 0], [36, 36, 36], [73, 73, 73], [109, 109, 109], [146, 146, 146], [182, 182, 182], [219, 219, 219], [255, 255, 255]]
+    };
 
     const els = {
       n: document.getElementById("n"),
@@ -1378,6 +1410,7 @@ const APPLET_HTML = raw"""
       duty: document.getElementById("duty"),
       couplingStrength: document.getElementById("couplingStrength"),
       overlapRows: document.getElementById("overlapRows"),
+      colorMap: document.getElementById("colorMap"),
       se: document.getElementById("se"),
       si: document.getElementById("si"),
       dt: document.getElementById("dt"),
@@ -1399,7 +1432,8 @@ const APPLET_HTML = raw"""
       cortical: document.getElementById("cortical"),
       retinal: document.getElementById("retinal"),
       kernelGraph: document.getElementById("kernelGraph"),
-      kernelInfo: document.getElementById("kernelInfo")
+      kernelInfo: document.getElementById("kernelInfo"),
+      legend: document.getElementById("legend")
     };
 
     let socket = null;
@@ -1407,8 +1441,18 @@ const APPLET_HTML = raw"""
     let resetting = false;
     let streamToken = 0;
     let lastFrameAt = performance.now();
+    let lastDisplayFrame = null;
+
+    function activeColorStops() {
+      return colorMaps[els.colorMap.value] || colorMaps.plasma;
+    }
+
+    function colorStopString(stops = activeColorStops()) {
+      return stops.map((rgb, idx) => `rgb(${rgb.join(",")}) ${(idx / (stops.length - 1)) * 100}%`).join(", ");
+    }
 
     function palette(v) {
+      const stops = activeColorStops();
       const t = Math.max(0, Math.min(1, v / 255));
       const scaled = t * (stops.length - 1);
       const idx = Math.min(Math.floor(scaled), stops.length - 2);
@@ -1419,6 +1463,10 @@ const APPLET_HTML = raw"""
         Math.round((1 - f) * a[1] + f * b[1]),
         Math.round((1 - f) * a[2] + f * b[2])
       ];
+    }
+
+    function updateLegend() {
+      els.legend.style.background = `linear-gradient(90deg, ${colorStopString()})`;
     }
 
     function setCanvasSize(canvas, rows, cols) {
@@ -1604,6 +1652,22 @@ const APPLET_HTML = raw"""
       drawValues(canvas, values, rows, cols);
     }
 
+    function drawCurrentFrame() {
+      if (!lastDisplayFrame) return;
+      drawCortical(
+        els.cortical,
+        lastDisplayFrame.values,
+        lastDisplayFrame.rows,
+        lastDisplayFrame.cols
+      );
+      drawRetinal(
+        els.retinal,
+        lastDisplayFrame.retinalValues,
+        lastDisplayFrame.retinalRows,
+        lastDisplayFrame.retinalCols
+      );
+    }
+
     function decodeFrame(data) {
       const binary = atob(data);
       const values = new Uint8Array(binary.length);
@@ -1639,6 +1703,8 @@ const APPLET_HTML = raw"""
       stopStream();
       resetMetrics();
       drawKernelGraph();
+      updateLegend();
+      lastDisplayFrame = null;
       setPauseUi(false);
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const url = `${protocol}//${location.host}/stream?${streamParams().toString()}`;
@@ -1681,8 +1747,8 @@ const APPLET_HTML = raw"""
         const retinalValues = decodeFrame(msg.retinalData || msg.data);
         const retinalRows = msg.retinalRows || msg.retinalN || msg.N;
         const retinalCols = msg.retinalCols || msg.retinalN || msg.N;
-        drawCortical(els.cortical, values, rows, cols);
-        drawRetinal(els.retinal, retinalValues, retinalRows, retinalCols);
+        lastDisplayFrame = { values, rows, cols, retinalValues, retinalRows, retinalCols };
+        drawCurrentFrame();
         els.simTime.textContent = `${msg.t.toFixed(1)} ms`;
         els.streamFps.textContent = observedFps.toFixed(1);
         els.msStep.textContent = msg.msPerStep.toFixed(3);
@@ -1741,11 +1807,25 @@ const APPLET_HTML = raw"""
 
     els.pausePlay.addEventListener("click", togglePausePlay);
     els.reset.addEventListener("click", resetStream);
+    els.colorMap.addEventListener("change", () => {
+      updateLegend();
+      drawCurrentFrame();
+    });
+    document.addEventListener("keydown", (event) => {
+      const active = document.activeElement;
+      const tag = active?.tagName;
+      const isTyping = active?.isContentEditable || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON";
+      if (event.code === "Space" && !event.repeat && !isTyping) {
+        event.preventDefault();
+        togglePausePlay();
+      }
+    });
     [
       els.n, els.kernelCutoff, els.se, els.si
     ].forEach((el) => el.addEventListener("input", drawKernelGraph));
     window.addEventListener("resize", drawKernelGraph);
     drawKernelGraph();
+    updateLegend();
     startStream();
   </script>
 </body>

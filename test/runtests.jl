@@ -381,6 +381,9 @@ end
         @test occursin("value=\"overlap\"", body)
         @test occursin("id=\"corticalFrame\"", body)
         @test occursin("retinal-angle-90", body)
+        @test occursin("id=\"colorMap\"", body)
+        @test occursin("nipy_spectral", body)
+        @test occursin("event.code === \"Space\"", body)
 
         address = "127.0.0.1:$(HTTP.port(server))"
         HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1") do ws
