@@ -1815,7 +1815,7 @@ const APPLET_HTML = raw"""
     document.addEventListener("keydown", (event) => {
       const active = document.activeElement;
       const tag = active?.tagName;
-      const isTyping = active?.isContentEditable || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON";
+      const isTyping = active?.isContentEditable || tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
       if (event.code === "Space" && !event.repeat && !isTyping) {
         event.preventDefault();
         togglePausePlay();
