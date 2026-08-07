@@ -1166,12 +1166,15 @@ const APPLET_HTML = raw"""
       display: grid;
       gap: 14px;
       min-width: 0;
+      align-content: start;
     }
 
     .metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
+      align-items: start;
+      grid-auto-rows: 38px;
     }
 
     .metric {
@@ -1181,6 +1184,9 @@ const APPLET_HTML = raw"""
       border-radius: 12px;
       padding: 5px 8px;
       min-width: 0;
+      height: 38px;
+      display: grid;
+      align-content: center;
       box-shadow: var(--soft-shadow);
     }
 
@@ -1389,7 +1395,7 @@ const APPLET_HTML = raw"""
     }
 
     .stimulus-canvas {
-      aspect-ratio: 8 / 1.35;
+      height: 82px;
       background: #f8fbfd;
       image-rendering: auto;
     }
