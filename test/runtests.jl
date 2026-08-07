@@ -223,6 +223,11 @@ end
     @test size(wide_ret) == size(wide_img)
     square_from_wide = retinal_transform(wide_img; output_size=(5, 5))
     @test size(square_from_wide) == (5, 5)
+
+    angle_by_column = repeat(reshape(collect(Float32, 1:8), 1, 8), 5, 1)
+    angle_ret = retinal_transform(angle_by_column; output_size=(3, 3))
+    @test angle_ret[2, 3] ≈ 1.0f0
+    @test angle_ret[2, 1] ≈ 5.0f0
 end
 
 @testset "parameter search smoke" begin

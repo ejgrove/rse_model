@@ -1230,7 +1230,7 @@ const APPLET_HTML = raw"""
           <canvas id="cortical"></canvas>
         </div>
         <div class="view">
-          <div class="view-head"><div class="view-title">Retinal view</div><div class="view-note">client-side log-polar map</div></div>
+          <div class="view-head"><div class="view-title">Retinal view</div><div class="view-note">server-side log-polar map</div></div>
           <canvas id="retinal"></canvas>
         </div>
       </div>
