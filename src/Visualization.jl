@@ -33,9 +33,9 @@ function retinal_transform(input_img::AbstractMatrix; output_size=size(input_img
         theta = mod(atan(y, x) + T(2pi), T(2pi))
         r_scaled = log(r + T(1e-26)) / T(2pi)
         theta_scaled = theta / T(2pi)
-        # Cortical columns encode polar angle; cortical rows encode radius/eccentricity.
-        x_in = theta_scaled * T(source_width)
-        y_in = r_scaled * T(source_height)
+        # Cortical rows encode polar angle; cortical columns encode radius/eccentricity.
+        x_in = r_scaled * T(source_width)
+        y_in = theta_scaled * T(source_height)
         output[row, col] = _gridwrap_bilinear(input_img, y_in, x_in)
     end
 
