@@ -269,7 +269,7 @@ function _fill_coupled_retinal_source!(retinal_source, left_activity, right_acti
     rows, cols = size(left_activity)
     @inbounds for col in 1:cols, row in 1:rows
         retinal_source[row, col] = left_activity[row, col]
-        retinal_source[rows + row, col] = right_activity[rows - row + 1, col]
+        retinal_source[rows + row, col] = right_activity[row, col]
     end
     return retinal_source
 end
@@ -1153,6 +1153,98 @@ const APPLET_HTML = raw"""
       aspect-ratio: 1 / 1;
     }
 
+    .canvas-frame {
+      position: relative;
+      padding: 38px 34px 30px;
+      border-radius: 22px;
+      background: #f8fbfd;
+    }
+
+    .canvas-frame canvas {
+      width: 100%;
+    }
+
+    .axis-label,
+    .hemi-label {
+      position: absolute;
+      z-index: 2;
+      color: #33495c;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      line-height: 1;
+      pointer-events: none;
+      text-transform: uppercase;
+    }
+
+    .axis-label {
+      color: #607284;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .cortical-frame {
+      --left-center: 50%;
+      --right-center: 50%;
+    }
+
+    .hemi-left,
+    .axis-top-left,
+    .axis-bottom-left {
+      left: var(--left-center);
+      transform: translateX(-50%);
+    }
+
+    .hemi-right,
+    .axis-top-right,
+    .axis-bottom-right {
+      left: var(--right-center);
+      transform: translateX(-50%);
+    }
+
+    .hemi-label {
+      top: 9px;
+    }
+
+    .axis-top-left,
+    .axis-top-right {
+      top: 24px;
+    }
+
+    .axis-bottom-left,
+    .axis-bottom-right {
+      bottom: 9px;
+    }
+
+    .cortical-frame:not(.coupled) .hemi-right,
+    .cortical-frame:not(.coupled) .axis-top-right,
+    .cortical-frame:not(.coupled) .axis-bottom-right {
+      display: none;
+    }
+
+    .retinal-angle-90 {
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .retinal-angle-270 {
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .retinal-angle-0 {
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    .retinal-angle-180 {
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
     .kernel-card {
       margin-top: 16px;
       padding: 13px;
@@ -1240,11 +1332,25 @@ const APPLET_HTML = raw"""
       <div class="views">
         <div class="view">
           <div class="view-head"><div class="view-title">Cortical sheet</div><div class="view-note" id="range">range -</div></div>
-          <canvas id="cortical"></canvas>
+          <div id="corticalFrame" class="canvas-frame cortical-frame">
+            <canvas id="cortical"></canvas>
+            <span id="hemiLeft" class="hemi-label hemi-left">Cortical sheet</span>
+            <span id="hemiRight" class="hemi-label hemi-right">Right hemisphere</span>
+            <span class="axis-label axis-top-left">90&deg;</span>
+            <span class="axis-label axis-bottom-left">270&deg;</span>
+            <span class="axis-label axis-top-right">90&deg;</span>
+            <span class="axis-label axis-bottom-right">270&deg;</span>
+          </div>
         </div>
         <div class="view">
           <div class="view-head"><div class="view-title">Retinal view</div><div class="view-note">server-side log-polar map</div></div>
-          <canvas id="retinal"></canvas>
+          <div class="canvas-frame retinal-frame">
+            <canvas id="retinal"></canvas>
+            <span class="axis-label retinal-angle-90">90&deg;</span>
+            <span class="axis-label retinal-angle-0">0&deg;</span>
+            <span class="axis-label retinal-angle-180">180&deg;</span>
+            <span class="axis-label retinal-angle-270">270&deg;</span>
+          </div>
         </div>
       </div>
       <div class="legend"></div>
@@ -1287,6 +1393,9 @@ const APPLET_HTML = raw"""
       rtx: document.getElementById("rtx"),
       gridN: document.getElementById("gridN"),
       range: document.getElementById("range"),
+      corticalFrame: document.getElementById("corticalFrame"),
+      hemiLeft: document.getElementById("hemiLeft"),
+      hemiRight: document.getElementById("hemiRight"),
       cortical: document.getElementById("cortical"),
       retinal: document.getElementById("retinal"),
       kernelGraph: document.getElementById("kernelGraph"),
@@ -1331,6 +1440,59 @@ const APPLET_HTML = raw"""
         image.data[j + 1] = g;
         image.data[j + 2] = b;
         image.data[j + 3] = 255;
+      }
+      ctx.putImageData(image, 0, 0);
+    }
+
+    function setPixel(image, pixelIndex, value) {
+      const [r, g, b] = palette(value);
+      const j = pixelIndex * 4;
+      image.data[j] = r;
+      image.data[j + 1] = g;
+      image.data[j + 2] = b;
+      image.data[j + 3] = 255;
+    }
+
+    function updateCorticalLabels(isCoupled, leftCenter = 50, rightCenter = 50) {
+      els.corticalFrame.classList.toggle("coupled", isCoupled);
+      els.corticalFrame.style.setProperty("--left-center", `${leftCenter}%`);
+      els.corticalFrame.style.setProperty("--right-center", `${rightCenter}%`);
+      els.hemiLeft.textContent = isCoupled ? "Left hemisphere" : "Cortical sheet";
+      els.hemiRight.textContent = "Right hemisphere";
+    }
+
+    function drawCortical(canvas, values, rows, cols) {
+      const isCoupled = cols >= rows * 1.5;
+      if (!isCoupled) {
+        updateCorticalLabels(false);
+        drawValues(canvas, values, rows, cols);
+        return;
+      }
+
+      const hemiCols = Math.floor(cols / 2);
+      const gapCols = Math.max(6, Math.round(rows * 0.08));
+      const drawCols = cols + gapCols;
+      setCanvasSize(canvas, rows, drawCols);
+      updateCorticalLabels(
+        true,
+        (hemiCols / 2) / drawCols * 100,
+        (hemiCols + gapCols + hemiCols / 2) / drawCols * 100
+      );
+
+      const ctx = canvas.getContext("2d");
+      const image = ctx.createImageData(drawCols, rows);
+      for (let i = 0; i < image.data.length; i += 4) {
+        image.data[i] = 248;
+        image.data[i + 1] = 251;
+        image.data[i + 2] = 253;
+        image.data[i + 3] = 255;
+      }
+
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const targetCol = col < hemiCols ? col : col + gapCols;
+          setPixel(image, row * drawCols + targetCol, values[row * cols + col]);
+        }
       }
       ctx.putImageData(image, 0, 0);
     }
@@ -1519,7 +1681,7 @@ const APPLET_HTML = raw"""
         const retinalValues = decodeFrame(msg.retinalData || msg.data);
         const retinalRows = msg.retinalRows || msg.retinalN || msg.N;
         const retinalCols = msg.retinalCols || msg.retinalN || msg.N;
-        drawValues(els.cortical, values, rows, cols);
+        drawCortical(els.cortical, values, rows, cols);
         drawRetinal(els.retinal, retinalValues, retinalRows, retinalCols);
         els.simTime.textContent = `${msg.t.toFixed(1)} ms`;
         els.streamFps.textContent = observedFps.toFixed(1);
