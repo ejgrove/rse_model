@@ -23,6 +23,8 @@ Base.@kwdef struct LiveConfig
     coupling::Symbol = :none
     coupling_strength::Float32 = 0.02f0
     overlap_rows::Int = 6
+    field_geometry::Symbol = :square
+    field_density::Float64 = 1.0
     max_frames::Int = 0
 end
 
@@ -57,15 +59,23 @@ function normalize_live_config(config::LiveConfig)
     backend = config.backend == :gpu ? :metal : config.backend
     backend in (:cpu, :metal) || throw(ArgumentError("backend must be :cpu or :metal."))
     boundary_x, boundary_y = _resolve_boundaries(config.boundary, config.boundary_x, config.boundary_y)
+    field_geometry = _normalize_field_geometry(config.field_geometry)
+    if field_geometry == :double_sech
+        boundary_x == :periodic && (boundary_x = :edge)
+        boundary_y == :periodic && (boundary_y = :edge)
+    end
 
     convolution = if config.convolution == :auto
-        _default_convolution(backend, boundary_x, boundary_y)
+        field_geometry == :double_sech && backend == :metal ? :separable : _default_convolution(backend, boundary_x, boundary_y)
     else
         config.convolution
     end
     convolution in (:fft, :separable) || throw(ArgumentError("convolution must be :auto, :fft, or :separable."))
     backend == :metal || convolution == :fft ||
         throw(ArgumentError("The CPU live backend currently supports FFT convolution only."))
+    if field_geometry == :double_sech && (backend != :metal || convolution != :separable)
+        throw(ArgumentError("The double-sech live field currently requires the Metal separable backend."))
+    end
     _validate_boundaries(boundary_x, boundary_y, convolution, backend)
     coupling = _normalize_live_coupling(config.coupling)
 
@@ -77,6 +87,7 @@ function normalize_live_config(config::LiveConfig)
     config.kernel_cutoff > 0 || throw(ArgumentError("kernel_cutoff must be positive."))
     config.max_frames >= 0 || throw(ArgumentError("max_frames must be non-negative."))
     config.coupling_strength >= 0 || throw(ArgumentError("coupling_strength must be non-negative."))
+    config.field_density > 0 || throw(ArgumentError("field_density must be positive."))
     overlap_rows = max(2, 2 * cld(config.overlap_rows, 2))
     overlap_rows = min(overlap_rows, max(2, 2 * div(max(N - 1, 2), 4)))
     if config.duty_cycle_percent !== nothing
@@ -106,6 +117,8 @@ function normalize_live_config(config::LiveConfig)
         coupling=coupling,
         coupling_strength=config.coupling_strength,
         overlap_rows=overlap_rows,
+        field_geometry=field_geometry,
+        field_density=config.field_density,
         max_frames=config.max_frames,
     )
 end
@@ -118,7 +131,7 @@ function _normalize_live_coupling(coupling::Symbol)
 end
 
 function _uses_two_hemispheres(config::LiveConfig)
-    return config.coupling in (:no_connection, :overlap)
+    return config.field_geometry == :double_sech || config.coupling in (:no_connection, :overlap)
 end
 
 function _uses_overlap_coupling(config::LiveConfig)
@@ -197,6 +210,8 @@ function live_config_from_query(params::AbstractDict{String,String})
         coupling=_parse_symbol(params, "coupling", :none),
         coupling_strength=_parse_float32(params, "coupling_strength", 0.02f0),
         overlap_rows=_parse_int(params, "overlap_rows", 6),
+        field_geometry=_parse_symbol(params, "field_geometry", _parse_symbol(params, "geometry", :square)),
+        field_density=_parse_float(params, "field_density", 1.0),
         max_frames=_parse_int(params, "max_frames", 0),
     ))
 end
@@ -207,6 +222,10 @@ end
 
 function _live_runtime(config::LiveConfig)
     return LiveRuntime(target_fps=config.target_fps, speed=config.speed)
+end
+
+function _live_field_geometry(config::LiveConfig)
+    return field_geometry(config.field_geometry, config.N; density=config.field_density)
 end
 
 function _steps_per_frame(target_fps::Integer, p::ModelParams)
@@ -335,16 +354,18 @@ end
 function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::LiveRuntime)
     _uses_two_hemispheres(config) && return _stream_cpu_coupled_frames(callback, config, runtime)
     p = _live_model_params(config)
+    geometry = _live_field_geometry(config)
     rng = _rng(config.seed)
-    Ue = rand(rng, Float32, config.N, config.N)
-    Ui = rand(rng, Float32, config.N, config.N)
-    Ke = generate_gaussian_kernel(config.Se, config.N; dtype=Float32)
-    Ki = generate_gaussian_kernel(config.Si, config.N; dtype=Float32)
+    Ue = rand(rng, Float32, geometry.rows, geometry.cols)
+    Ui = rand(rng, Float32, geometry.rows, geometry.cols)
+    apply_field_mask!(Ue, Ui, geometry)
+    Ke = generate_gaussian_kernel(config.Se, geometry.rows; dtype=Float32)
+    Ki = generate_gaussian_kernel(config.Si, geometry.rows; dtype=Float32)
     excitatory_convolver = FFTConvolver(Ke, Ue)
     inhibitory_convolver = FFTConvolver(Ki, Ui)
     Uec = similar(Ue)
     Uic = similar(Ui)
-    noise = Array{Float32}(undef, 2, config.N, config.N)
+    noise = Array{Float32}(undef, 2, geometry.rows, geometry.cols)
 
     step_idx = 0
     frame_idx = 0
@@ -371,11 +392,12 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::Liv
                 p,
                 config.duty_cycle_percent,
             )
+            apply_field_mask!(Ue, Ui, geometry)
             step_idx += 1
         end
         step_ms = (time_ns() - step_start) / 1e6
         activity = abs.(Ue .- Ui)
-        retinal_activity = retinal_transform(activity)
+        retinal_activity = retinal_transform(activity; output_size=(config.N, config.N))
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
         callback(frame) === false && break
@@ -387,14 +409,18 @@ end
 
 function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runtime::LiveRuntime)
     p = _live_model_params(config)
+    geometry = _live_field_geometry(config)
     rng = _rng(config.seed)
-    N = config.N
-    Ue_left = rand(rng, Float32, N, N)
-    Ui_left = rand(rng, Float32, N, N)
-    Ue_right = rand(rng, Float32, N, N)
-    Ui_right = rand(rng, Float32, N, N)
-    Ke = generate_gaussian_kernel(config.Se, N; dtype=Float32)
-    Ki = generate_gaussian_kernel(config.Si, N; dtype=Float32)
+    rows = geometry.rows
+    cols = geometry.cols
+    Ue_left = rand(rng, Float32, rows, cols)
+    Ui_left = rand(rng, Float32, rows, cols)
+    Ue_right = rand(rng, Float32, rows, cols)
+    Ui_right = rand(rng, Float32, rows, cols)
+    apply_field_mask!(Ue_left, Ui_left, geometry)
+    apply_field_mask!(Ue_right, Ui_right, geometry)
+    Ke = generate_gaussian_kernel(config.Se, rows; dtype=Float32)
+    Ki = generate_gaussian_kernel(config.Si, rows; dtype=Float32)
 
     convolver_e_left = FFTConvolver(Ke, Ue_left)
     convolver_i_left = FFTConvolver(Ki, Ui_left)
@@ -404,12 +430,12 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
     Uic_left = similar(Ui_left)
     Uec_right = similar(Ue_right)
     Uic_right = similar(Ui_right)
-    noise_left = Array{Float32}(undef, 2, N, N)
-    noise_right = Array{Float32}(undef, 2, N, N)
+    noise_left = Array{Float32}(undef, 2, rows, cols)
+    noise_right = Array{Float32}(undef, 2, rows, cols)
     activity_left = similar(Ue_left)
     activity_right = similar(Ue_right)
-    display_activity = Matrix{Float32}(undef, N, 2N)
-    retinal_source = Matrix{Float32}(undef, 2N, N)
+    display_activity = Matrix{Float32}(undef, rows, 2cols)
+    retinal_source = Matrix{Float32}(undef, 2rows, cols)
 
     step_idx = 0
     frame_idx = 0
@@ -451,6 +477,8 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
                 p,
                 config.duty_cycle_percent,
             )
+            apply_field_mask!(Ue_left, Ui_left, geometry)
+            apply_field_mask!(Ue_right, Ui_right, geometry)
             if _uses_overlap_coupling(config)
                 _apply_midline_coupling!(
                     Ue_left,
@@ -460,6 +488,8 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
                     config.coupling_strength,
                     config.overlap_rows,
                 )
+                apply_field_mask!(Ue_left, Ui_left, geometry)
+                apply_field_mask!(Ue_right, Ui_right, geometry)
             end
             step_idx += 1
         end
@@ -468,7 +498,7 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
         @. activity_right = abs(Ue_right - Ui_right)
         _fill_coupled_views!(display_activity, activity_left, activity_right)
         _fill_coupled_retinal_source!(retinal_source, activity_left, activity_right)
-        retinal_activity = retinal_transform(retinal_source; output_size=(N, N), angle_origin=Float32(pi / 2))
+        retinal_activity = retinal_transform(retinal_source; output_size=(config.N, config.N), angle_origin=Float32(pi / 2))
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -491,18 +521,21 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
     _uses_two_hemispheres(config) && return _stream_metal_coupled_frames(callback, config, runtime)
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     p = _live_model_params(config)
+    geometry = _live_field_geometry(config)
     config.seed === nothing || Metal.seed!(config.seed)
 
-    Ue = Metal.rand(Float32, config.N, config.N)
-    Ui = Metal.rand(Float32, config.N, config.N)
+    Ue = Metal.rand(Float32, geometry.rows, geometry.cols)
+    Ui = Metal.rand(Float32, geometry.rows, geometry.cols)
+    mask_gpu = has_field_mask(geometry) ? Metal.MtlArray(geometry.mask_float32) : nothing
+    mask_gpu === nothing || apply_field_mask!(Ue, Ui, mask_gpu, config.gpu_threads)
     excitatory_convolver = if config.convolution == :fft
-        Ke = generate_gaussian_kernel(config.Se, config.N; dtype=Float32)
+        Ke = generate_gaussian_kernel(config.Se, geometry.rows; dtype=Float32)
         MetalFFTConvolver(Ke, Ue)
     else
         MetalSeparableConvolver(config.Se, Ue; cutoff=config.kernel_cutoff)
     end
     inhibitory_convolver = if config.convolution == :fft
-        Ki = generate_gaussian_kernel(config.Si, config.N; dtype=Float32)
+        Ki = generate_gaussian_kernel(config.Si, geometry.rows; dtype=Float32)
         MetalFFTConvolver(Ki, Ui)
     else
         MetalSeparableConvolver(config.Si, Ui; cutoff=config.kernel_cutoff)
@@ -563,6 +596,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
                     config.duty_cycle_percent,
                 )
             end
+            mask_gpu === nothing || apply_field_mask!(Ue, Ui, mask_gpu, config.gpu_threads)
             step_idx += 1
         end
         Metal.synchronize()
@@ -571,7 +605,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
         cortical_gpu .= abs.(Ue .- Ui)
         Metal.synchronize()
         activity = Array(cortical_gpu)
-        retinal_activity = retinal_transform(activity)
+        retinal_activity = retinal_transform(activity; output_size=(config.N, config.N))
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
         callback(frame) === false && break
@@ -584,17 +618,24 @@ end
 function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, runtime::LiveRuntime)
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     p = _live_model_params(config)
+    geometry = _live_field_geometry(config)
     config.seed === nothing || Metal.seed!(config.seed)
-    N = config.N
+    rows = geometry.rows
+    cols = geometry.cols
 
-    Ue_left = Metal.rand(Float32, N, N)
-    Ui_left = Metal.rand(Float32, N, N)
-    Ue_right = Metal.rand(Float32, N, N)
-    Ui_right = Metal.rand(Float32, N, N)
+    Ue_left = Metal.rand(Float32, rows, cols)
+    Ui_left = Metal.rand(Float32, rows, cols)
+    Ue_right = Metal.rand(Float32, rows, cols)
+    Ui_right = Metal.rand(Float32, rows, cols)
+    mask_gpu = has_field_mask(geometry) ? Metal.MtlArray(geometry.mask_float32) : nothing
+    if mask_gpu !== nothing
+        apply_field_mask!(Ue_left, Ui_left, mask_gpu, config.gpu_threads)
+        apply_field_mask!(Ue_right, Ui_right, mask_gpu, config.gpu_threads)
+    end
 
     if config.convolution == :fft
-        Ke = generate_gaussian_kernel(config.Se, N; dtype=Float32)
-        Ki = generate_gaussian_kernel(config.Si, N; dtype=Float32)
+        Ke = generate_gaussian_kernel(config.Se, rows; dtype=Float32)
+        Ki = generate_gaussian_kernel(config.Si, rows; dtype=Float32)
         convolver_e_left = MetalFFTConvolver(Ke, Ue_left)
         convolver_i_left = MetalFFTConvolver(Ki, Ui_left)
         convolver_e_right = MetalFFTConvolver(Ke, Ue_right)
@@ -616,8 +657,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
     noise_I_right = similar(Ui_right)
     activity_left_gpu = similar(Ue_left)
     activity_right_gpu = similar(Ue_right)
-    display_activity = Matrix{Float32}(undef, N, 2N)
-    retinal_source = Matrix{Float32}(undef, 2N, N)
+    display_activity = Matrix{Float32}(undef, rows, 2cols)
+    retinal_source = Matrix{Float32}(undef, 2rows, cols)
 
     step_idx = 0
     frame_idx = 0
@@ -705,6 +746,10 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
                     config.duty_cycle_percent,
                 )
             end
+            if mask_gpu !== nothing
+                apply_field_mask!(Ue_left, Ui_left, mask_gpu, config.gpu_threads)
+                apply_field_mask!(Ue_right, Ui_right, mask_gpu, config.gpu_threads)
+            end
 
             if _uses_overlap_coupling(config)
                 apply_midline_coupling!(
@@ -716,6 +761,10 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
                     overlap_rows=config.overlap_rows,
                     gpu_threads=config.gpu_threads,
                 )
+                if mask_gpu !== nothing
+                    apply_field_mask!(Ue_left, Ui_left, mask_gpu, config.gpu_threads)
+                    apply_field_mask!(Ue_right, Ui_right, mask_gpu, config.gpu_threads)
+                end
             end
             step_idx += 1
         end
@@ -729,7 +778,7 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
         activity_right = Array(activity_right_gpu)
         _fill_coupled_views!(display_activity, activity_left, activity_right)
         _fill_coupled_retinal_source!(retinal_source, activity_left, activity_right)
-        retinal_activity = retinal_transform(retinal_source; output_size=(N, N), angle_origin=Float32(pi / 2))
+        retinal_activity = retinal_transform(retinal_source; output_size=(config.N, config.N), angle_origin=Float32(pi / 2))
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -798,6 +847,8 @@ function _hello_json(config::LiveConfig)
         ",\"coupling\":", _json_string(config.coupling),
         ",\"couplingStrength\":", _json_number(config.coupling_strength; digits=5),
         ",\"overlapRows\":", config.overlap_rows,
+        ",\"fieldGeometry\":", _json_string(config.field_geometry),
+        ",\"fieldDensity\":", _json_number(config.field_density; digits=3),
         "}",
     )
 end
@@ -1492,8 +1543,8 @@ const APPLET_HTML = raw"""
       <div class="control-section">
         <div class="section-title">Boundary / Coupling</div>
         <div class="control-grid">
-          <label>Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
-          <label>Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option></select></label>
+          <label>Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
+          <label>Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
           <label>Coupling<select id="coupling"><option value="off">off</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
           <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
           <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
@@ -1512,6 +1563,8 @@ const APPLET_HTML = raw"""
       <div class="control-section">
         <div class="section-title">Neural Field Parameters</div>
         <div class="control-grid">
+          <label class="wide">Field geometry<select id="fieldGeometry"><option value="square">square</option><option value="double_sech">double-sech V1</option></select></label>
+          <label>Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
           <label>N<input id="n" type="number" min="5" step="2" value="81"></label>
           <label>Se<input id="se" type="number" min="0.1" step="0.05" value="2"></label>
           <label>Si<input id="si" type="number" min="0.1" step="0.05" value="5"></label>
@@ -1601,6 +1654,8 @@ const APPLET_HTML = raw"""
       se: document.getElementById("se"),
       si: document.getElementById("si"),
       dt: document.getElementById("dt"),
+      fieldGeometry: document.getElementById("fieldGeometry"),
+      fieldDensity: document.getElementById("fieldDensity"),
       fastN: document.getElementById("fastN"),
       seed: document.getElementById("seed"),
       pausePlay: document.getElementById("pausePlay"),
@@ -1972,9 +2027,19 @@ const APPLET_HTML = raw"""
       params.set("Se", els.se.value);
       params.set("Si", els.si.value);
       params.set("dt", els.dt.value);
+      params.set("field_geometry", els.fieldGeometry.value);
+      params.set("field_density", els.fieldDensity.value);
       params.set("fast_n", els.fastN.checked ? "true" : "false");
       if (els.seed.value.trim()) params.set("seed", els.seed.value.trim());
       return params;
+    }
+
+    function applyGeometryDefaults() {
+      if (els.fieldGeometry.value !== "double_sech") return;
+      els.backend.value = "metal";
+      els.conv.value = "separable";
+      if (els.boundaryX.value === "periodic") els.boundaryX.value = "edge";
+      if (els.boundaryY.value === "periodic") els.boundaryY.value = "edge";
     }
 
     function sendVisualizationUpdate() {
@@ -1994,6 +2059,7 @@ const APPLET_HTML = raw"""
 
     function startStream() {
       stopStream();
+      applyGeometryDefaults();
       resetMetrics();
       drawKernelGraph();
       updateLegend();
@@ -2017,7 +2083,7 @@ const APPLET_HTML = raw"""
         const msg = JSON.parse(event.data);
         if (msg.type === "hello") {
           const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
-          const coupling = msg.coupling === "overlap" ? `, overlap g=${msg.couplingStrength}` : msg.coupling === "no_connection" ? ", two hemispheres no connection" : "";
+          const coupling = msg.coupling === "overlap" ? `, overlap g=${msg.couplingStrength}` : (msg.coupling === "no_connection" || msg.fieldGeometry === "double_sech") ? ", two hemispheres no connection" : "";
           streamStimulus = {
             A: Number(msg.A) || 0,
             period: Number(msg.T) || 1,
@@ -2025,7 +2091,8 @@ const APPLET_HTML = raw"""
           };
           drawStimulusGraph(0);
           const speedText = msg.speed === 0 ? "max speed" : `${msg.speed}x speed`;
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
+          const geometryText = msg.fieldGeometry === "double_sech" ? `, double-sech V1 density ${msg.fieldDensity}` : "";
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY}${geometryText}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {
@@ -2140,6 +2207,10 @@ const APPLET_HTML = raw"""
 
     els.pausePlay.addEventListener("click", togglePausePlay);
     els.reset.addEventListener("click", resetStream);
+    els.fieldGeometry.addEventListener("change", () => {
+      applyGeometryDefaults();
+      resetStream();
+    });
     els.fps.addEventListener("input", () => queueVisualizationUpdate(160));
     els.speed.addEventListener("change", () => queueVisualizationUpdate(0));
     els.colorMap.addEventListener("change", () => {

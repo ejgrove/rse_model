@@ -108,12 +108,21 @@ state on Metal and only transfers one display frame per browser update. The
 first run may pause while Julia and Metal compile; subsequent streams are the
 useful real-time benchmark.
 
-The applet also includes experimental boundary and coupling controls. Boundary
-modes are `periodic`, `edge`, and `zero`; non-periodic boundaries require the
-Metal separable convolution path. Coupling mode `midline` runs left and right
-cortical sheets, weakly mixes mirrored top/bottom overlap bands, displays the
-two sheets side-by-side, and keeps the retinal view square through a simple
-hemifield projection.
+The applet also includes experimental boundary, coupling, and field-geometry
+controls. Boundary modes are `periodic`, `edge`, `zero`, and
+`partial_reflect`; non-periodic boundaries require the Metal separable
+convolution path. Coupling mode `midline` runs left and right cortical sheets,
+weakly mixes mirrored top/bottom overlap bands, displays the two sheets
+side-by-side, and keeps the retinal view square through a simple hemifield
+projection.
+
+The `double-sech V1` field geometry is an experimental V1-only approximation
+inspired by Schira et al. (2010). It keeps two masked hemispheres with even node
+spacing inside a curved V1 sheet and maps their concatenated cortical activity
+back into one square visual field. `Field density` changes the backing-grid
+resolution while preserving the V1 shape proportions. This first version uses
+the Metal separable path and does not yet implement the full V2/V3 banded
+extension.
 
 ## Parameter Search
 Run an `A x T` sweep and save one montage per requested time point:

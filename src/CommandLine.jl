@@ -74,8 +74,9 @@ end
 
 function _validate_boundary_cli(value)
     key = lowercase(value)
-    key in ("periodic", "edge", "zero") && return Symbol(key)
-    throw(ArgumentError("--boundary must be periodic, edge, or zero"))
+    key in ("periodic", "edge", "zero", "partial_reflect") && return Symbol(key)
+    key in ("partial_reflective", "partially_reflective", "reflect") && return :partial_reflect
+    throw(ArgumentError("--boundary must be periodic, edge, zero, or partial_reflect"))
 end
 
 function _fft_plan_flags(value)
@@ -120,16 +121,16 @@ function _build_parser()
             default = 3.0
             dest_name = "kernel_cutoff"
         "--boundary"
-            help = "Convolution boundary mode for both axes: periodic, edge, or zero. Axis-specific flags override this."
+            help = "Convolution boundary mode for both axes: periodic, edge, zero, or partial_reflect. Axis-specific flags override this."
             arg_type = String
             default = nothing
         "--boundary-x"
-            help = "Horizontal/left-right convolution boundary mode: periodic, edge, or zero."
+            help = "Horizontal/left-right convolution boundary mode: periodic, edge, zero, or partial_reflect."
             arg_type = String
             default = nothing
             dest_name = "boundary_x"
         "--boundary-y"
-            help = "Vertical/top-bottom convolution boundary mode: periodic, edge, or zero."
+            help = "Vertical/top-bottom convolution boundary mode: periodic, edge, zero, or partial_reflect."
             arg_type = String
             default = nothing
             dest_name = "boundary_y"

@@ -2,6 +2,7 @@ module RSEModel
 
 include("Params.jl")
 include("Kernels.jl")
+include("Geometry.jl")
 include("Model.jl")
 include("Visualization.jl")
 include("ParameterSearch.jl")
@@ -14,6 +15,10 @@ export ModelParams,
     gaussian_kernel_2d,
     generate_gaussian_kernel,
     generate_gaussian_kernel_1d,
+    FieldGeometry,
+    field_geometry,
+    has_field_mask,
+    apply_field_mask!,
     firing_rate,
     DEFAULT_FFT_FLAGS,
     fft_convolution!,

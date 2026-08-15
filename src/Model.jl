@@ -7,6 +7,7 @@ const DEFAULT_FFT_FLAGS = FFTW.MEASURE
 const BOUNDARY_PERIODIC = UInt32(0)
 const BOUNDARY_EDGE = UInt32(1)
 const BOUNDARY_ZERO = UInt32(2)
+const BOUNDARY_PARTIAL_REFLECT = UInt32(3)
 
 firing_rate(x) = inv(one(x) + exp(-x))
 
@@ -37,14 +38,16 @@ function strobe_stimulus(t, A, period, p::ModelParams, duty_cycle_percent=nothin
 end
 
 function _boundary_mode(boundary::Symbol)
-    boundary in (:periodic, :edge, :zero) && return boundary
-    throw(ArgumentError("boundary must be :periodic, :edge, or :zero."))
+    boundary in (:periodic, :edge, :zero, :partial_reflect) && return boundary
+    boundary in (:partial_reflective, :partially_reflective, :reflect) && return :partial_reflect
+    throw(ArgumentError("boundary must be :periodic, :edge, :zero, or :partial_reflect."))
 end
 
 function _boundary_code(boundary::Symbol)
     mode = _boundary_mode(boundary)
     mode == :periodic && return BOUNDARY_PERIODIC
     mode == :edge && return BOUNDARY_EDGE
+    mode == :partial_reflect && return BOUNDARY_PARTIAL_REFLECT
     return BOUNDARY_ZERO
 end
 
@@ -272,6 +275,19 @@ function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, 
                 source_col0 = min(max(source_col, Int32(0)), Int32(cols) - Int32(1))
                 source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
                 acc += input[source_idx] * kernel[k]
+            elseif boundary_code == BOUNDARY_PARTIAL_REFLECT
+                source_col0 = source_col
+                reflected = false
+                if source_col < Int32(0)
+                    source_col0 = -source_col - Int32(1)
+                    reflected = true
+                elseif source_col >= Int32(cols)
+                    source_col0 = Int32(2) * Int32(cols) - source_col - Int32(1)
+                    reflected = true
+                end
+                source_col0 = min(max(source_col0, Int32(0)), Int32(cols) - Int32(1))
+                source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+                acc += input[source_idx] * kernel[k] * (reflected ? 0.5f0 : 1.0f0)
             elseif source_col >= Int32(0) && source_col < Int32(cols)
                 source_idx = row0 + UInt32(source_col) * rows + UInt32(1)
                 acc += input[source_idx] * kernel[k]
@@ -299,6 +315,19 @@ function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, 
                 source_row0 = min(max(source_row, Int32(0)), Int32(rows) - Int32(1))
                 source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
                 acc += input[source_idx] * kernel[k]
+            elseif boundary_code == BOUNDARY_PARTIAL_REFLECT
+                source_row0 = source_row
+                reflected = false
+                if source_row < Int32(0)
+                    source_row0 = -source_row - Int32(1)
+                    reflected = true
+                elseif source_row >= Int32(rows)
+                    source_row0 = Int32(2) * Int32(rows) - source_row - Int32(1)
+                    reflected = true
+                end
+                source_row0 = min(max(source_row0, Int32(0)), Int32(rows) - Int32(1))
+                source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+                acc += input[source_idx] * kernel[k] * (reflected ? 0.5f0 : 1.0f0)
             elseif source_row >= Int32(0) && source_row < Int32(rows)
                 source_idx = UInt32(source_row) + col0 * rows + UInt32(1)
                 acc += input[source_idx] * kernel[k]
@@ -343,6 +372,19 @@ function _metal_conv_cols_pair_kernel!(
                 source_col0 = min(max(source_col, Int32(0)), Int32(cols) - Int32(1))
                 source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
                 acc_e += input_e[source_idx] * kernel_e[k]
+            elseif boundary_code == BOUNDARY_PARTIAL_REFLECT
+                source_col0 = source_col
+                reflected = false
+                if source_col < Int32(0)
+                    source_col0 = -source_col - Int32(1)
+                    reflected = true
+                elseif source_col >= Int32(cols)
+                    source_col0 = Int32(2) * Int32(cols) - source_col - Int32(1)
+                    reflected = true
+                end
+                source_col0 = min(max(source_col0, Int32(0)), Int32(cols) - Int32(1))
+                source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+                acc_e += input_e[source_idx] * kernel_e[k] * (reflected ? 0.5f0 : 1.0f0)
             elseif source_col >= Int32(0) && source_col < Int32(cols)
                 source_idx = row0 + UInt32(source_col) * rows + UInt32(1)
                 acc_e += input_e[source_idx] * kernel_e[k]
@@ -362,6 +404,19 @@ function _metal_conv_cols_pair_kernel!(
                 source_col0 = min(max(source_col, Int32(0)), Int32(cols) - Int32(1))
                 source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
                 acc_i += input_i[source_idx] * kernel_i[k]
+            elseif boundary_code == BOUNDARY_PARTIAL_REFLECT
+                source_col0 = source_col
+                reflected = false
+                if source_col < Int32(0)
+                    source_col0 = -source_col - Int32(1)
+                    reflected = true
+                elseif source_col >= Int32(cols)
+                    source_col0 = Int32(2) * Int32(cols) - source_col - Int32(1)
+                    reflected = true
+                end
+                source_col0 = min(max(source_col0, Int32(0)), Int32(cols) - Int32(1))
+                source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
+                acc_i += input_i[source_idx] * kernel_i[k] * (reflected ? 0.5f0 : 1.0f0)
             elseif source_col >= Int32(0) && source_col < Int32(cols)
                 source_idx = row0 + UInt32(source_col) * rows + UInt32(1)
                 acc_i += input_i[source_idx] * kernel_i[k]
@@ -406,6 +461,19 @@ function _metal_conv_rows_pair_kernel!(
                 source_row0 = min(max(source_row, Int32(0)), Int32(rows) - Int32(1))
                 source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
                 acc_e += input_e[source_idx] * kernel_e[k]
+            elseif boundary_code == BOUNDARY_PARTIAL_REFLECT
+                source_row0 = source_row
+                reflected = false
+                if source_row < Int32(0)
+                    source_row0 = -source_row - Int32(1)
+                    reflected = true
+                elseif source_row >= Int32(rows)
+                    source_row0 = Int32(2) * Int32(rows) - source_row - Int32(1)
+                    reflected = true
+                end
+                source_row0 = min(max(source_row0, Int32(0)), Int32(rows) - Int32(1))
+                source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+                acc_e += input_e[source_idx] * kernel_e[k] * (reflected ? 0.5f0 : 1.0f0)
             elseif source_row >= Int32(0) && source_row < Int32(rows)
                 source_idx = UInt32(source_row) + col0 * rows + UInt32(1)
                 acc_e += input_e[source_idx] * kernel_e[k]
@@ -425,6 +493,19 @@ function _metal_conv_rows_pair_kernel!(
                 source_row0 = min(max(source_row, Int32(0)), Int32(rows) - Int32(1))
                 source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
                 acc_i += input_i[source_idx] * kernel_i[k]
+            elseif boundary_code == BOUNDARY_PARTIAL_REFLECT
+                source_row0 = source_row
+                reflected = false
+                if source_row < Int32(0)
+                    source_row0 = -source_row - Int32(1)
+                    reflected = true
+                elseif source_row >= Int32(rows)
+                    source_row0 = Int32(2) * Int32(rows) - source_row - Int32(1)
+                    reflected = true
+                end
+                source_row0 = min(max(source_row0, Int32(0)), Int32(rows) - Int32(1))
+                source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
+                acc_i += input_i[source_idx] * kernel_i[k] * (reflected ? 0.5f0 : 1.0f0)
             elseif source_row >= Int32(0) && source_row < Int32(rows)
                 source_idx = UInt32(source_row) + col0 * rows + UInt32(1)
                 acc_i += input_i[source_idx] * kernel_i[k]
@@ -553,6 +634,28 @@ function separable_convolution_pair!(
     )
 
     return out_e, out_i
+end
+
+function _metal_apply_mask_kernel!(U, mask, n)
+    i = thread_position_in_grid().x
+    if i <= n
+        U[i] *= mask[i]
+    end
+    return
+end
+
+function apply_field_mask!(U, mask_gpu, gpu_threads::Integer)
+    n = length(U)
+    threads = min(gpu_threads, n)
+    groups = cld(n, threads)
+    @metal threads=threads groups=groups _metal_apply_mask_kernel!(U, mask_gpu, UInt32(n))
+    return U
+end
+
+function apply_field_mask!(Ue, Ui, mask_gpu, gpu_threads::Integer)
+    apply_field_mask!(Ue, mask_gpu, gpu_threads)
+    apply_field_mask!(Ui, mask_gpu, gpu_threads)
+    return Ue, Ui
 end
 
 function _metal_euler_kernel!(

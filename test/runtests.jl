@@ -26,6 +26,28 @@ end
     @test next_fast_odd_size(201) == 225
 end
 
+@testset "field geometry" begin
+    square = field_geometry(:square, 25)
+    @test square.kind == :square
+    @test size(square.mask) == (25, 25)
+    @test all(square.mask)
+
+    v1 = field_geometry(:double_sech, 25)
+    @test v1.kind == :double_sech
+    @test v1.rows == 25
+    @test v1.cols > v1.rows
+    @test 0 < count(v1.mask) < length(v1.mask)
+
+    dense = field_geometry(:double_sech, 25; density=1.5)
+    @test dense.rows > v1.rows
+    @test dense.cols > v1.cols
+
+    U = ones(Float32, size(v1.mask))
+    apply_field_mask!(U, v1)
+    @test all(U[.!v1.mask] .== 0)
+    @test all(U[v1.mask] .== 1)
+end
+
 @testset "model params constructors" begin
     @test ModelParams() isa ModelParams{Float64}
     @test ModelParams{Float32}().dt isa Float32
@@ -372,6 +394,27 @@ end
     @test runtime.target_fps == 12
     @test runtime.speed == 0.5
     @test !RSEModel._apply_visual_control!(runtime, "pause")
+
+    double_sech_config = live_config_from_query(Dict(
+        "backend" => "metal",
+        "conv" => "auto",
+        "field_geometry" => "double_sech",
+        "field_density" => "1.5",
+        "boundary_x" => "periodic",
+        "boundary_y" => "partial_reflective",
+        "coupling" => "off",
+    ))
+    @test double_sech_config.field_geometry == :double_sech
+    @test double_sech_config.field_density == 1.5
+    @test double_sech_config.convolution == :separable
+    @test double_sech_config.boundary_x == :edge
+    @test double_sech_config.boundary_y == :partial_reflect
+    @test RSEModel._uses_two_hemispheres(double_sech_config)
+
+    @test_throws ArgumentError live_config_from_query(Dict(
+        "backend" => "cpu",
+        "field_geometry" => "double_sech",
+    ))
 end
 
 @testset "live applet server" begin
@@ -391,6 +434,9 @@ end
         @test occursin("id=\"colorMap\"", body)
         @test occursin("nipy_spectral", body)
         @test occursin("id=\"stimulusGraph\"", body)
+        @test occursin("id=\"fieldGeometry\"", body)
+        @test occursin("value=\"double_sech\"", body)
+        @test occursin("value=\"partial_reflect\"", body)
         @test occursin("event.code === \"Space\"", body)
         @test occursin("event.code === \"Enter\"", body)
         @test !occursin("id=\"dtMetric\"", body)
