@@ -116,13 +116,13 @@ weakly mixes mirrored top/bottom overlap bands, displays the two sheets
 side-by-side, and keeps the retinal view square through a simple hemifield
 projection.
 
-The `double-sech V1` field geometry is an experimental V1-only approximation
-inspired by Schira et al. (2010). It keeps two masked hemispheres with even node
-spacing inside a curved V1 sheet and maps their concatenated cortical activity
-back into one square visual field. `Field density` changes the backing-grid
-resolution while preserving the V1 shape proportions. This first version uses
-the Metal separable path and does not yet implement the full V2/V3 banded
-extension.
+The `double-sech V1` field geometry uses the dipole Double-Sech mapping from
+Schira et al. (2010) with the published `a=1.05`, `b=90`, and `k=19.3`
+parameters. It keeps two masked hemispheres with even node spacing inside the
+V1 sheet and maps both hemispheres back into one square visual field. In this
+mode, `Field density` is the resolution control; the square-grid `N` control is
+ignored. This first version uses the Metal separable path and does not yet
+implement the full V2/V3 banded extension.
 
 ## Parameter Search
 Run an `A x T` sweep and save one montage per requested time point:

@@ -32,15 +32,25 @@ end
     @test size(square.mask) == (25, 25)
     @test all(square.mask)
 
-    v1 = field_geometry(:double_sech, 25)
+    v1 = field_geometry(:double_sech)
     @test v1.kind == :double_sech
-    @test v1.rows == 25
+    @test v1.rows == 81
     @test v1.cols > v1.rows
     @test 0 < count(v1.mask) < length(v1.mask)
 
-    dense = field_geometry(:double_sech, 25; density=1.5)
+    dense = field_geometry(:double_sech; density=1.5)
     @test dense.rows > v1.rows
     @test dense.cols > v1.cols
+    @test field_geometry(:double_sech, 25; density=1.0).rows == v1.rows
+
+    @test double_sech_shear(1.05, 0.0, 1.05) ≈ 1.0
+    @test dipole_double_sech_map(0.0, 0.0) isa ComplexF64
+
+    left = reshape(collect(Float32, 1:length(v1.mask)), size(v1.mask))
+    right = fill(2.0f0, size(v1.mask))
+    ret = double_sech_retinal_transform(left, right, v1; output_size=(31, 31))
+    @test size(ret) == (31, 31)
+    @test all(isfinite, ret)
 
     U = ones(Float32, size(v1.mask))
     apply_field_mask!(U, v1)
@@ -398,6 +408,7 @@ end
     double_sech_config = live_config_from_query(Dict(
         "backend" => "metal",
         "conv" => "auto",
+        "N" => "25",
         "field_geometry" => "double_sech",
         "field_density" => "1.5",
         "boundary_x" => "periodic",
@@ -406,6 +417,7 @@ end
     ))
     @test double_sech_config.field_geometry == :double_sech
     @test double_sech_config.field_density == 1.5
+    @test double_sech_config.N == 123
     @test double_sech_config.convolution == :separable
     @test double_sech_config.boundary_x == :edge
     @test double_sech_config.boundary_y == :partial_reflect
@@ -435,6 +447,8 @@ end
         @test occursin("nipy_spectral", body)
         @test occursin("id=\"stimulusGraph\"", body)
         @test occursin("id=\"fieldGeometry\"", body)
+        @test occursin("id=\"fieldDensityControl\"", body)
+        @test occursin("id=\"nControl\"", body)
         @test occursin("value=\"double_sech\"", body)
         @test occursin("value=\"partial_reflect\"", body)
         @test occursin("event.code === \"Space\"", body)

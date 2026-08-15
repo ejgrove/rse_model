@@ -59,35 +59,39 @@ function normalize_live_config(config::LiveConfig)
     backend = config.backend == :gpu ? :metal : config.backend
     backend in (:cpu, :metal) || throw(ArgumentError("backend must be :cpu or :metal."))
     boundary_x, boundary_y = _resolve_boundaries(config.boundary, config.boundary_x, config.boundary_y)
-    field_geometry = _normalize_field_geometry(config.field_geometry)
-    if field_geometry == :double_sech
+    geometry_kind = _normalize_field_geometry(config.field_geometry)
+    config.field_density > 0 || throw(ArgumentError("field_density must be positive."))
+    if geometry_kind == :double_sech
         boundary_x == :periodic && (boundary_x = :edge)
         boundary_y == :periodic && (boundary_y = :edge)
     end
 
     convolution = if config.convolution == :auto
-        field_geometry == :double_sech && backend == :metal ? :separable : _default_convolution(backend, boundary_x, boundary_y)
+        geometry_kind == :double_sech && backend == :metal ? :separable : _default_convolution(backend, boundary_x, boundary_y)
     else
         config.convolution
     end
     convolution in (:fft, :separable) || throw(ArgumentError("convolution must be :auto, :fft, or :separable."))
     backend == :metal || convolution == :fft ||
         throw(ArgumentError("The CPU live backend currently supports FFT convolution only."))
-    if field_geometry == :double_sech && (backend != :metal || convolution != :separable)
+    if geometry_kind == :double_sech && (backend != :metal || convolution != :separable)
         throw(ArgumentError("The double-sech live field currently requires the Metal separable backend."))
     end
     _validate_boundaries(boundary_x, boundary_y, convolution, backend)
     coupling = _normalize_live_coupling(config.coupling)
 
     target_fps = max(1, config.target_fps)
-    N = config.fast_n ? next_fast_odd_size(config.N) : odd_positive_int(config.N)
+    N = if geometry_kind == :double_sech
+        field_geometry(:double_sech; density=config.field_density).rows
+    else
+        config.fast_n ? next_fast_odd_size(config.N) : odd_positive_int(config.N)
+    end
     config.speed >= 0 || throw(ArgumentError("speed must be non-negative."))
     config.dt > 0 || throw(ArgumentError("dt must be positive."))
     config.gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
     config.kernel_cutoff > 0 || throw(ArgumentError("kernel_cutoff must be positive."))
     config.max_frames >= 0 || throw(ArgumentError("max_frames must be non-negative."))
     config.coupling_strength >= 0 || throw(ArgumentError("coupling_strength must be non-negative."))
-    config.field_density > 0 || throw(ArgumentError("field_density must be positive."))
     overlap_rows = max(2, 2 * cld(config.overlap_rows, 2))
     overlap_rows = min(overlap_rows, max(2, 2 * div(max(N - 1, 2), 4)))
     if config.duty_cycle_percent !== nothing
@@ -117,7 +121,7 @@ function normalize_live_config(config::LiveConfig)
         coupling=coupling,
         coupling_strength=config.coupling_strength,
         overlap_rows=overlap_rows,
-        field_geometry=field_geometry,
+        field_geometry=geometry_kind,
         field_density=config.field_density,
         max_frames=config.max_frames,
     )
@@ -225,7 +229,10 @@ function _live_runtime(config::LiveConfig)
 end
 
 function _live_field_geometry(config::LiveConfig)
-    return field_geometry(config.field_geometry, config.N; density=config.field_density)
+    if config.field_geometry == :double_sech
+        return field_geometry(:double_sech; density=config.field_density)
+    end
+    return field_geometry(:square, config.N)
 end
 
 function _steps_per_frame(target_fps::Integer, p::ModelParams)
@@ -306,6 +313,20 @@ function _fill_coupled_retinal_source!(retinal_source, left_activity, right_acti
         retinal_source[rows + row, col] = right_activity[row, col]
     end
     return retinal_source
+end
+
+function _coupled_retinal_activity(left_activity, right_activity, retinal_source, geometry::FieldGeometry, config::LiveConfig)
+    if geometry.kind == :double_sech
+        return double_sech_retinal_transform(
+            left_activity,
+            right_activity,
+            geometry;
+            output_size=(config.N, config.N),
+        )
+    end
+
+    _fill_coupled_retinal_source!(retinal_source, left_activity, right_activity)
+    return retinal_transform(retinal_source; output_size=(config.N, config.N), angle_origin=Float32(pi / 2))
 end
 
 function _reset_throttle!(runtime::LiveRuntime)
@@ -497,8 +518,7 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
         @. activity_left = abs(Ue_left - Ui_left)
         @. activity_right = abs(Ue_right - Ui_right)
         _fill_coupled_views!(display_activity, activity_left, activity_right)
-        _fill_coupled_retinal_source!(retinal_source, activity_left, activity_right)
-        retinal_activity = retinal_transform(retinal_source; output_size=(config.N, config.N), angle_origin=Float32(pi / 2))
+        retinal_activity = _coupled_retinal_activity(activity_left, activity_right, retinal_source, geometry, config)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -777,8 +797,7 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
         activity_left = Array(activity_left_gpu)
         activity_right = Array(activity_right_gpu)
         _fill_coupled_views!(display_activity, activity_left, activity_right)
-        _fill_coupled_retinal_source!(retinal_source, activity_left, activity_right)
-        retinal_activity = retinal_transform(retinal_source; output_size=(config.N, config.N), angle_origin=Float32(pi / 2))
+        retinal_activity = _coupled_retinal_activity(activity_left, activity_right, retinal_source, geometry, config)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -1177,6 +1196,10 @@ const APPLET_HTML = raw"""
       grid-column: 1 / -1;
     }
 
+    .hidden-control {
+      display: none !important;
+    }
+
     label {
       display: grid;
       gap: 6px;
@@ -1537,7 +1560,7 @@ const APPLET_HTML = raw"""
           <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
           <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
         </div>
-        <label class="check-row"><input id="fastN" type="checkbox" checked> Snap to FFT-friendly odd N</label>
+        <label id="fastNControl" class="check-row"><input id="fastN" type="checkbox" checked> Snap to FFT-friendly odd N</label>
       </div>
 
       <div class="control-section">
@@ -1564,8 +1587,8 @@ const APPLET_HTML = raw"""
         <div class="section-title">Neural Field Parameters</div>
         <div class="control-grid">
           <label class="wide">Field geometry<select id="fieldGeometry"><option value="square">square</option><option value="double_sech">double-sech V1</option></select></label>
-          <label>Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
-          <label>N<input id="n" type="number" min="5" step="2" value="81"></label>
+          <label id="fieldDensityControl" class="hidden-control">Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
+          <label id="nControl">N<input id="n" type="number" min="5" step="2" value="81"></label>
           <label>Se<input id="se" type="number" min="0.1" step="0.05" value="2"></label>
           <label>Si<input id="si" type="number" min="0.1" step="0.05" value="5"></label>
           <label>dt (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
@@ -1656,7 +1679,10 @@ const APPLET_HTML = raw"""
       dt: document.getElementById("dt"),
       fieldGeometry: document.getElementById("fieldGeometry"),
       fieldDensity: document.getElementById("fieldDensity"),
+      fieldDensityControl: document.getElementById("fieldDensityControl"),
+      nControl: document.getElementById("nControl"),
       fastN: document.getElementById("fastN"),
+      fastNControl: document.getElementById("fastNControl"),
       seed: document.getElementById("seed"),
       pausePlay: document.getElementById("pausePlay"),
       reset: document.getElementById("reset"),
@@ -1834,7 +1860,11 @@ const APPLET_HTML = raw"""
         canvas.height = height;
       }
 
-      const n = Math.max(5, Number(els.n.value) || 101);
+      let n = Math.max(5, Number(els.n.value) || 101);
+      if (els.fieldGeometry.value === "double_sech") {
+        n = Math.max(5, Math.round(81 * (Number(els.fieldDensity.value) || 1)));
+        if (n % 2 === 0) n += 1;
+      }
       const se = Math.max(0.1, Number(els.se.value) || 2);
       const si = Math.max(0.1, Number(els.si.value) || 5);
       const cutoff = Math.max(0.5, Number(els.kernelCutoff.value) || 3);
@@ -2010,7 +2040,14 @@ const APPLET_HTML = raw"""
 
     function streamParams() {
       const params = new URLSearchParams();
-      params.set("N", els.n.value);
+      const isDoubleSech = els.fieldGeometry.value === "double_sech";
+      params.set("field_geometry", els.fieldGeometry.value);
+      if (isDoubleSech) {
+        params.set("field_density", els.fieldDensity.value);
+      } else {
+        params.set("N", els.n.value);
+        params.set("fast_n", els.fastN.checked ? "true" : "false");
+      }
       params.set("fps", els.fps.value);
       params.set("backend", els.backend.value);
       params.set("conv", els.conv.value);
@@ -2027,14 +2064,22 @@ const APPLET_HTML = raw"""
       params.set("Se", els.se.value);
       params.set("Si", els.si.value);
       params.set("dt", els.dt.value);
-      params.set("field_geometry", els.fieldGeometry.value);
-      params.set("field_density", els.fieldDensity.value);
-      params.set("fast_n", els.fastN.checked ? "true" : "false");
       if (els.seed.value.trim()) params.set("seed", els.seed.value.trim());
       return params;
     }
 
+    function syncGeometryControls() {
+      const isDoubleSech = els.fieldGeometry.value === "double_sech";
+      els.nControl.classList.toggle("hidden-control", isDoubleSech);
+      els.fastNControl.classList.toggle("hidden-control", isDoubleSech);
+      els.fieldDensityControl.classList.toggle("hidden-control", !isDoubleSech);
+      els.n.disabled = isDoubleSech;
+      els.fastN.disabled = isDoubleSech;
+      els.fieldDensity.disabled = !isDoubleSech;
+    }
+
     function applyGeometryDefaults() {
+      syncGeometryControls();
       if (els.fieldGeometry.value !== "double_sech") return;
       els.backend.value = "metal";
       els.conv.value = "separable";
@@ -2232,7 +2277,7 @@ const APPLET_HTML = raw"""
       }
     });
     [
-      els.n, els.kernelCutoff, els.se, els.si
+      els.n, els.fieldDensity, els.kernelCutoff, els.se, els.si
     ].forEach((el) => el.addEventListener("input", drawKernelGraph));
     window.addEventListener("resize", () => {
       drawKernelGraph();
