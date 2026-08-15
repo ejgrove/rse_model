@@ -37,6 +37,8 @@ end
     @test v1.rows == 81
     @test v1.cols > v1.rows
     @test 0 < count(v1.mask) < length(v1.mask)
+    col_counts = [count(@view v1.mask[:, col]) for col in axes(v1.mask, 2)]
+    @test col_counts[findlast(>(0), col_counts)] <= 3
 
     dense = field_geometry(:double_sech; density=1.5)
     @test dense.rows > v1.rows
@@ -167,7 +169,7 @@ end
         ce_pair = RSEModel.MetalSeparableConvolver(2.0, Ue; cutoff=3.0)
         ci_pair = RSEModel.MetalSeparableConvolver(5.0, Ui; cutoff=3.0)
 
-        for (boundary_x, boundary_y) in ((:periodic, :periodic), (:edge, :zero), (:zero, :edge))
+        for (boundary_x, boundary_y) in ((:periodic, :periodic), (:edge, :zero), (:zero, :edge), (:partial_reflect, :edge))
             RSEModel.separable_convolution!(
                 out_e_separate,
                 ce_separate,
@@ -175,6 +177,7 @@ end
                 gpu_threads=128,
                 boundary_x=boundary_x,
                 boundary_y=boundary_y,
+                partial_reflect_strength=0.35,
             )
             RSEModel.separable_convolution!(
                 out_i_separate,
@@ -183,6 +186,7 @@ end
                 gpu_threads=128,
                 boundary_x=boundary_x,
                 boundary_y=boundary_y,
+                partial_reflect_strength=0.35,
             )
             RSEModel.separable_convolution_pair!(
                 out_e_pair,
@@ -194,6 +198,7 @@ end
                 gpu_threads=128,
                 boundary_x=boundary_x,
                 boundary_y=boundary_y,
+                partial_reflect_strength=0.35,
             )
             Metal.synchronize()
 
@@ -411,16 +416,17 @@ end
         "N" => "25",
         "field_geometry" => "double_sech",
         "field_density" => "1.5",
-        "boundary_x" => "periodic",
-        "boundary_y" => "partial_reflective",
+        "boundary" => "partial_reflective",
+        "partial_reflect_strength" => "0.35",
         "coupling" => "off",
     ))
     @test double_sech_config.field_geometry == :double_sech
     @test double_sech_config.field_density == 1.5
     @test double_sech_config.N == 123
     @test double_sech_config.convolution == :separable
-    @test double_sech_config.boundary_x == :edge
+    @test double_sech_config.boundary_x == :partial_reflect
     @test double_sech_config.boundary_y == :partial_reflect
+    @test double_sech_config.partial_reflect_strength == 0.35f0
     @test RSEModel._uses_two_hemispheres(double_sech_config)
 
     @test_throws ArgumentError live_config_from_query(Dict(
@@ -449,6 +455,9 @@ end
         @test occursin("id=\"fieldGeometry\"", body)
         @test occursin("id=\"fieldDensityControl\"", body)
         @test occursin("id=\"nControl\"", body)
+        @test occursin("id=\"boundaryControl\"", body)
+        @test occursin("id=\"boundaryXControl\"", body)
+        @test occursin("id=\"partialReflectStrength\"", body)
         @test occursin("value=\"double_sech\"", body)
         @test occursin("value=\"partial_reflect\"", body)
         @test occursin("event.code === \"Space\"", body)

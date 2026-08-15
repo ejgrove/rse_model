@@ -258,7 +258,19 @@ function fft_convolution!(out, convolver::MetalFFTConvolver, U)
     return out
 end
 
-function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, n, boundary_code, fft_origin_shift)
+function _metal_conv_cols_kernel!(
+    out,
+    input,
+    kernel,
+    radius,
+    rows,
+    cols,
+    klen,
+    n,
+    boundary_code,
+    fft_origin_shift,
+    partial_reflect_strength,
+)
     i = thread_position_in_grid().x
     if i <= n
         row0 = (i - 1) % rows
@@ -287,7 +299,7 @@ function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, 
                 end
                 source_col0 = min(max(source_col0, Int32(0)), Int32(cols) - Int32(1))
                 source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
-                acc += input[source_idx] * kernel[k] * (reflected ? 0.5f0 : 1.0f0)
+                acc += input[source_idx] * kernel[k] * (reflected ? partial_reflect_strength : 1.0f0)
             elseif source_col >= Int32(0) && source_col < Int32(cols)
                 source_idx = row0 + UInt32(source_col) * rows + UInt32(1)
                 acc += input[source_idx] * kernel[k]
@@ -298,7 +310,19 @@ function _metal_conv_cols_kernel!(out, input, kernel, radius, rows, cols, klen, 
     return
 end
 
-function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, n, boundary_code, fft_origin_shift)
+function _metal_conv_rows_kernel!(
+    out,
+    input,
+    kernel,
+    radius,
+    rows,
+    cols,
+    klen,
+    n,
+    boundary_code,
+    fft_origin_shift,
+    partial_reflect_strength,
+)
     i = thread_position_in_grid().x
     if i <= n
         row0 = (i - 1) % rows
@@ -327,7 +351,7 @@ function _metal_conv_rows_kernel!(out, input, kernel, radius, rows, cols, klen, 
                 end
                 source_row0 = min(max(source_row0, Int32(0)), Int32(rows) - Int32(1))
                 source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
-                acc += input[source_idx] * kernel[k] * (reflected ? 0.5f0 : 1.0f0)
+                acc += input[source_idx] * kernel[k] * (reflected ? partial_reflect_strength : 1.0f0)
             elseif source_row >= Int32(0) && source_row < Int32(rows)
                 source_idx = UInt32(source_row) + col0 * rows + UInt32(1)
                 acc += input[source_idx] * kernel[k]
@@ -354,6 +378,7 @@ function _metal_conv_cols_pair_kernel!(
     n,
     boundary_code,
     fft_origin_shift,
+    partial_reflect_strength,
 )
     i = thread_position_in_grid().x
     if i <= n
@@ -384,7 +409,7 @@ function _metal_conv_cols_pair_kernel!(
                 end
                 source_col0 = min(max(source_col0, Int32(0)), Int32(cols) - Int32(1))
                 source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
-                acc_e += input_e[source_idx] * kernel_e[k] * (reflected ? 0.5f0 : 1.0f0)
+                acc_e += input_e[source_idx] * kernel_e[k] * (reflected ? partial_reflect_strength : 1.0f0)
             elseif source_col >= Int32(0) && source_col < Int32(cols)
                 source_idx = row0 + UInt32(source_col) * rows + UInt32(1)
                 acc_e += input_e[source_idx] * kernel_e[k]
@@ -416,7 +441,7 @@ function _metal_conv_cols_pair_kernel!(
                 end
                 source_col0 = min(max(source_col0, Int32(0)), Int32(cols) - Int32(1))
                 source_idx = row0 + UInt32(source_col0) * rows + UInt32(1)
-                acc_i += input_i[source_idx] * kernel_i[k] * (reflected ? 0.5f0 : 1.0f0)
+                acc_i += input_i[source_idx] * kernel_i[k] * (reflected ? partial_reflect_strength : 1.0f0)
             elseif source_col >= Int32(0) && source_col < Int32(cols)
                 source_idx = row0 + UInt32(source_col) * rows + UInt32(1)
                 acc_i += input_i[source_idx] * kernel_i[k]
@@ -443,6 +468,7 @@ function _metal_conv_rows_pair_kernel!(
     n,
     boundary_code,
     fft_origin_shift,
+    partial_reflect_strength,
 )
     i = thread_position_in_grid().x
     if i <= n
@@ -473,7 +499,7 @@ function _metal_conv_rows_pair_kernel!(
                 end
                 source_row0 = min(max(source_row0, Int32(0)), Int32(rows) - Int32(1))
                 source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
-                acc_e += input_e[source_idx] * kernel_e[k] * (reflected ? 0.5f0 : 1.0f0)
+                acc_e += input_e[source_idx] * kernel_e[k] * (reflected ? partial_reflect_strength : 1.0f0)
             elseif source_row >= Int32(0) && source_row < Int32(rows)
                 source_idx = UInt32(source_row) + col0 * rows + UInt32(1)
                 acc_e += input_e[source_idx] * kernel_e[k]
@@ -505,7 +531,7 @@ function _metal_conv_rows_pair_kernel!(
                 end
                 source_row0 = min(max(source_row0, Int32(0)), Int32(rows) - Int32(1))
                 source_idx = UInt32(source_row0) + col0 * rows + UInt32(1)
-                acc_i += input_i[source_idx] * kernel_i[k] * (reflected ? 0.5f0 : 1.0f0)
+                acc_i += input_i[source_idx] * kernel_i[k] * (reflected ? partial_reflect_strength : 1.0f0)
             elseif source_row >= Int32(0) && source_row < Int32(rows)
                 source_idx = UInt32(source_row) + col0 * rows + UInt32(1)
                 acc_i += input_i[source_idx] * kernel_i[k]
@@ -524,6 +550,7 @@ function separable_convolution!(
     boundary=nothing,
     boundary_x::Symbol=:periodic,
     boundary_y::Symbol=:periodic,
+    partial_reflect_strength::Real=0.5,
 )
     rows_u, cols_u = size(U)
     rows = UInt32(rows_u)
@@ -534,6 +561,8 @@ function separable_convolution!(
     boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
     boundary_x_code = _boundary_code(boundary_x)
     boundary_y_code = _boundary_code(boundary_y)
+    0 <= partial_reflect_strength <= 1 || throw(ArgumentError("partial_reflect_strength must be between 0 and 1."))
+    reflect_strength = Float32(partial_reflect_strength)
     # The reference FFT path uses a centered Gaussian matrix, so periodic
     # separable convolution needs the same circular origin shift.
     fft_origin_shift_x = UInt32(boundary_x == :periodic ? div(cols_u, 2) : 0)
@@ -552,6 +581,7 @@ function separable_convolution!(
         n,
         boundary_x_code,
         fft_origin_shift_x,
+        reflect_strength,
     )
     @metal threads=threads groups=groups _metal_conv_rows_kernel!(
         out,
@@ -564,6 +594,7 @@ function separable_convolution!(
         n,
         boundary_y_code,
         fft_origin_shift_y,
+        reflect_strength,
     )
 
     return out
@@ -580,6 +611,7 @@ function separable_convolution_pair!(
     boundary=nothing,
     boundary_x::Symbol=:periodic,
     boundary_y::Symbol=:periodic,
+    partial_reflect_strength::Real=0.5,
 )
     rows_u, cols_u = size(Ue)
     rows = UInt32(rows_u)
@@ -592,6 +624,8 @@ function separable_convolution_pair!(
     boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
     boundary_x_code = _boundary_code(boundary_x)
     boundary_y_code = _boundary_code(boundary_y)
+    0 <= partial_reflect_strength <= 1 || throw(ArgumentError("partial_reflect_strength must be between 0 and 1."))
+    reflect_strength = Float32(partial_reflect_strength)
     # Match the legacy centered-kernel FFT origin for periodic separable runs.
     fft_origin_shift_x = UInt32(boundary_x == :periodic ? div(cols_u, 2) : 0)
     fft_origin_shift_y = UInt32(boundary_y == :periodic ? div(rows_u, 2) : 0)
@@ -614,6 +648,7 @@ function separable_convolution_pair!(
         n,
         boundary_x_code,
         fft_origin_shift_x,
+        reflect_strength,
     )
     @metal threads=threads groups=groups _metal_conv_rows_pair_kernel!(
         out_e,
@@ -631,6 +666,7 @@ function separable_convolution_pair!(
         n,
         boundary_y_code,
         fft_origin_shift_y,
+        reflect_strength,
     )
 
     return out_e, out_i
@@ -830,6 +866,7 @@ function _metal_step_separable!(
     gpu_threads::Integer,
     boundary_x::Symbol=:periodic,
     boundary_y::Symbol=:periodic,
+    partial_reflect_strength::Real=0.5,
     duty_cycle_percent=nothing,
 )
     separable_convolution_pair!(
@@ -842,6 +879,7 @@ function _metal_step_separable!(
         gpu_threads=gpu_threads,
         boundary_x=boundary_x,
         boundary_y=boundary_y,
+        partial_reflect_strength=partial_reflect_strength,
     )
 
     stim = strobe_stimulus(t, A, period, p, duty_cycle_percent)
@@ -909,11 +947,14 @@ function run_simulation_gpu(;
     boundary=nothing,
     boundary_x::Symbol=:periodic,
     boundary_y::Symbol=:periodic,
+    partial_reflect_strength::Real=0.5,
     duty_cycle_percent=nothing,
 ) where {F<:AbstractFloat}
     Metal.functional() || throw(ErrorException("Metal.jl is not functional on this machine."))
     dtype === Float32 || throw(ArgumentError("The Metal backend currently supports Float32 only."))
     gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
+    0 <= partial_reflect_strength <= 1 ||
+        throw(ArgumentError("partial_reflect_strength must be between 0 and 1."))
     boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
     _validate_boundaries(boundary_x, boundary_y, convolution, :metal)
 
@@ -998,6 +1039,7 @@ function run_simulation_gpu(;
                 gpu_threads,
                 boundary_x,
                 boundary_y,
+                partial_reflect_strength,
                 duty_cycle_percent,
             )
         end
@@ -1049,6 +1091,7 @@ function run_simulation(;
     boundary=nothing,
     boundary_x::Symbol=:periodic,
     boundary_y::Symbol=:periodic,
+    partial_reflect_strength::Real=0.5,
     duty_cycle_percent=nothing,
 ) where {F<:AbstractFloat}
     boundary_x, boundary_y = _resolve_boundaries(boundary, boundary_x, boundary_y)
@@ -1073,6 +1116,7 @@ function run_simulation(;
             kernel_cutoff=kernel_cutoff,
             boundary_x=boundary_x,
             boundary_y=boundary_y,
+            partial_reflect_strength=partial_reflect_strength,
             duty_cycle_percent=duty_cycle_percent,
         )
     elseif backend != :cpu

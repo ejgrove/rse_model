@@ -111,18 +111,20 @@ useful real-time benchmark.
 The applet also includes experimental boundary, coupling, and field-geometry
 controls. Boundary modes are `periodic`, `edge`, `zero`, and
 `partial_reflect`; non-periodic boundaries require the Metal separable
-convolution path. Coupling mode `midline` runs left and right cortical sheets,
-weakly mixes mirrored top/bottom overlap bands, displays the two sheets
-side-by-side, and keeps the retinal view square through a simple hemifield
-projection.
+convolution path. The `partial_reflect` mode mirrors activity across the
+boundary and scales only the reflected contribution by the reflect gain
+parameter. Coupling mode `midline` runs left and right cortical sheets, weakly
+mixes mirrored top/bottom overlap bands, displays the two sheets side-by-side,
+and keeps the retinal view square through a simple hemifield projection.
 
 The `double-sech V1` field geometry uses the dipole Double-Sech mapping from
 Schira et al. (2010) with the published `a=1.05`, `b=90`, and `k=19.3`
 parameters. It keeps two masked hemispheres with even node spacing inside the
 V1 sheet and maps both hemispheres back into one square visual field. In this
 mode, `Field density` is the resolution control; the square-grid `N` control is
-ignored. This first version uses the Metal separable path and does not yet
-implement the full V2/V3 banded extension.
+ignored. Double-sech also uses one geometry-wide boundary condition instead of
+separate x/y boundary controls. This first version uses the Metal separable path
+and does not yet implement the full V2/V3 banded extension.
 
 ## Parameter Search
 Run an `A x T` sweep and save one montage per requested time point:

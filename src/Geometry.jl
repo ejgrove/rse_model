@@ -61,9 +61,21 @@ end
 
 function _double_sech_polygon(samples_e::Integer=360, samples_p::Integer=120)
     top = [dipole_double_sech_map(_eccentricity_sample(i, samples_e), pi / 2) for i in 1:samples_e]
-    cap = [dipole_double_sech_map(DOUBLE_SECH_E_MAX, pi / 2 - pi * (i - 1) / max(samples_p - 1, 1)) for i in 2:samples_p]
+    top_edge = top[end]
+    bottom_edge = dipole_double_sech_map(DOUBLE_SECH_E_MAX, -pi / 2)
+    peripheral_vertex = dipole_double_sech_map(DOUBLE_SECH_E_MAX, 0.0)
+    top_control = Complex(real(peripheral_vertex), imag(top_edge))
+    bottom_control = Complex(real(peripheral_vertex), imag(bottom_edge))
+    top_cap = [
+        (1 - t)^2 * top_edge + 2 * (1 - t) * t * top_control + t^2 * peripheral_vertex
+        for t in range(0, 1; length=max(3, div(samples_p, 2)))[2:end]
+    ]
+    bottom_cap = [
+        (1 - t)^2 * peripheral_vertex + 2 * (1 - t) * t * bottom_control + t^2 * bottom_edge
+        for t in range(0, 1; length=max(3, div(samples_p, 2)))[2:end]
+    ]
     bottom = [dipole_double_sech_map(_eccentricity_sample(i, samples_e), -pi / 2) for i in samples_e:-1:1]
-    return vcat(top, cap, bottom)
+    return vcat(top, top_cap, bottom_cap, bottom)
 end
 
 function _double_sech_bounds(poly)

@@ -20,6 +20,7 @@ Base.@kwdef struct LiveConfig
     boundary::Union{Nothing,Symbol} = nothing
     boundary_x::Symbol = :periodic
     boundary_y::Symbol = :periodic
+    partial_reflect_strength::Float32 = 0.5f0
     coupling::Symbol = :none
     coupling_strength::Float32 = 0.02f0
     overlap_rows::Int = 6
@@ -91,6 +92,8 @@ function normalize_live_config(config::LiveConfig)
     config.gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
     config.kernel_cutoff > 0 || throw(ArgumentError("kernel_cutoff must be positive."))
     config.max_frames >= 0 || throw(ArgumentError("max_frames must be non-negative."))
+    0 <= config.partial_reflect_strength <= 1 ||
+        throw(ArgumentError("partial_reflect_strength must be between 0 and 1."))
     config.coupling_strength >= 0 || throw(ArgumentError("coupling_strength must be non-negative."))
     overlap_rows = max(2, 2 * cld(config.overlap_rows, 2))
     overlap_rows = min(overlap_rows, max(2, 2 * div(max(N - 1, 2), 4)))
@@ -118,6 +121,7 @@ function normalize_live_config(config::LiveConfig)
         boundary=nothing,
         boundary_x=boundary_x,
         boundary_y=boundary_y,
+        partial_reflect_strength=config.partial_reflect_strength,
         coupling=coupling,
         coupling_strength=config.coupling_strength,
         overlap_rows=overlap_rows,
@@ -211,6 +215,7 @@ function live_config_from_query(params::AbstractDict{String,String})
         boundary=_parse_optional_symbol(params, "boundary"),
         boundary_x=_parse_symbol(params, "boundary_x", _parse_symbol(params, "boundary", :periodic)),
         boundary_y=_parse_symbol(params, "boundary_y", _parse_symbol(params, "boundary", :periodic)),
+        partial_reflect_strength=_parse_float32(params, "partial_reflect_strength", 0.5f0),
         coupling=_parse_symbol(params, "coupling", :none),
         coupling_strength=_parse_float32(params, "coupling_strength", 0.02f0),
         overlap_rows=_parse_int(params, "overlap_rows", 6),
@@ -613,6 +618,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
                     config.gpu_threads,
                     config.boundary_x,
                     config.boundary_y,
+                    config.partial_reflect_strength,
                     config.duty_cycle_percent,
                 )
             end
@@ -745,6 +751,7 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
                     config.gpu_threads,
                     config.boundary_x,
                     config.boundary_y,
+                    config.partial_reflect_strength,
                     config.duty_cycle_percent,
                 )
                 _metal_step_separable!(
@@ -763,6 +770,7 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
                     config.gpu_threads,
                     config.boundary_x,
                     config.boundary_y,
+                    config.partial_reflect_strength,
                     config.duty_cycle_percent,
                 )
             end
@@ -863,6 +871,7 @@ function _hello_json(config::LiveConfig)
         ",\"kernelCutoff\":", _json_number(config.kernel_cutoff),
         ",\"boundaryX\":", _json_string(config.boundary_x),
         ",\"boundaryY\":", _json_string(config.boundary_y),
+        ",\"partialReflectStrength\":", _json_number(config.partial_reflect_strength; digits=3),
         ",\"coupling\":", _json_string(config.coupling),
         ",\"couplingStrength\":", _json_number(config.coupling_strength; digits=5),
         ",\"overlapRows\":", config.overlap_rows,
@@ -1566,8 +1575,10 @@ const APPLET_HTML = raw"""
       <div class="control-section">
         <div class="section-title">Boundary / Coupling</div>
         <div class="control-grid">
-          <label>Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
-          <label>Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
+          <label id="boundaryControl" class="hidden-control">Boundary<select id="boundary"><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
+          <label id="boundaryXControl">Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
+          <label id="boundaryYControl">Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
+          <label>Reflect gain<input id="partialReflectStrength" type="number" min="0" max="1" step="0.05" value="0.5"></label>
           <label>Coupling<select id="coupling"><option value="off">off</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
           <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
           <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
@@ -1663,8 +1674,13 @@ const APPLET_HTML = raw"""
       fps: document.getElementById("fps"),
       backend: document.getElementById("backend"),
       conv: document.getElementById("conv"),
+      boundary: document.getElementById("boundary"),
+      boundaryControl: document.getElementById("boundaryControl"),
       boundaryX: document.getElementById("boundaryX"),
+      boundaryXControl: document.getElementById("boundaryXControl"),
       boundaryY: document.getElementById("boundaryY"),
+      boundaryYControl: document.getElementById("boundaryYControl"),
+      partialReflectStrength: document.getElementById("partialReflectStrength"),
       coupling: document.getElementById("coupling"),
       speed: document.getElementById("speed"),
       kernelCutoff: document.getElementById("kernelCutoff"),
@@ -2051,8 +2067,13 @@ const APPLET_HTML = raw"""
       params.set("fps", els.fps.value);
       params.set("backend", els.backend.value);
       params.set("conv", els.conv.value);
-      params.set("boundary_x", els.boundaryX.value);
-      params.set("boundary_y", els.boundaryY.value);
+      if (isDoubleSech) {
+        params.set("boundary", els.boundary.value);
+      } else {
+        params.set("boundary_x", els.boundaryX.value);
+        params.set("boundary_y", els.boundaryY.value);
+      }
+      params.set("partial_reflect_strength", els.partialReflectStrength.value);
       params.set("coupling", els.coupling.value);
       params.set("speed", els.speed.value);
       params.set("kernel_cutoff", els.kernelCutoff.value);
@@ -2073,9 +2094,15 @@ const APPLET_HTML = raw"""
       els.nControl.classList.toggle("hidden-control", isDoubleSech);
       els.fastNControl.classList.toggle("hidden-control", isDoubleSech);
       els.fieldDensityControl.classList.toggle("hidden-control", !isDoubleSech);
+      els.boundaryControl.classList.toggle("hidden-control", !isDoubleSech);
+      els.boundaryXControl.classList.toggle("hidden-control", isDoubleSech);
+      els.boundaryYControl.classList.toggle("hidden-control", isDoubleSech);
       els.n.disabled = isDoubleSech;
       els.fastN.disabled = isDoubleSech;
       els.fieldDensity.disabled = !isDoubleSech;
+      els.boundary.disabled = !isDoubleSech;
+      els.boundaryX.disabled = isDoubleSech;
+      els.boundaryY.disabled = isDoubleSech;
     }
 
     function applyGeometryDefaults() {
@@ -2083,8 +2110,6 @@ const APPLET_HTML = raw"""
       if (els.fieldGeometry.value !== "double_sech") return;
       els.backend.value = "metal";
       els.conv.value = "separable";
-      if (els.boundaryX.value === "periodic") els.boundaryX.value = "edge";
-      if (els.boundaryY.value === "periodic") els.boundaryY.value = "edge";
     }
 
     function sendVisualizationUpdate() {
@@ -2137,7 +2162,9 @@ const APPLET_HTML = raw"""
           drawStimulusGraph(0);
           const speedText = msg.speed === 0 ? "max speed" : `${msg.speed}x speed`;
           const geometryText = msg.fieldGeometry === "double_sech" ? `, double-sech V1 density ${msg.fieldDensity}` : "";
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} x:${msg.boundaryX} y:${msg.boundaryY}${geometryText}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
+          const boundaryText = msg.boundaryX === msg.boundaryY ? `boundary:${msg.boundaryX}` : `x:${msg.boundaryX} y:${msg.boundaryY}`;
+          const reflectText = (msg.boundaryX === "partial_reflect" || msg.boundaryY === "partial_reflect") ? ` reflect=${msg.partialReflectStrength}` : "";
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {

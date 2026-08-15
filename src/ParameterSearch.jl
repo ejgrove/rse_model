@@ -552,6 +552,7 @@ function _run_parameter_search_job_metal(job, config::ParameterSearchConfig, max
                 config.gpu_threads,
                 :periodic,
                 :periodic,
+                0.5f0,
                 config.duty_cycle_percent,
             )
         end

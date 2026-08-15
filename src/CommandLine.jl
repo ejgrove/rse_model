@@ -134,6 +134,11 @@ function _build_parser()
             arg_type = String
             default = nothing
             dest_name = "boundary_y"
+        "--partial-reflect-strength"
+            help = "Reflected boundary contribution for partial_reflect mode, from 0 to 1."
+            arg_type = Float64
+            default = 0.5
+            dest_name = "partial_reflect_strength"
         "--duty-cycle"
             help = "Stimulus duty cycle percentage. A value of 50 uses threshold 0. Defaults to the ModelParams threshold V."
             arg_type = Float64
@@ -369,6 +374,7 @@ function main(argv=ARGS)
             kernel_cutoff=args["kernel_cutoff"],
             boundary_x=boundary_x,
             boundary_y=boundary_y,
+            partial_reflect_strength=args["partial_reflect_strength"],
             duty_cycle_percent=args["duty_cycle_percent"],
         )
         println(
