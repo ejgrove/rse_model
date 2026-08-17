@@ -5,7 +5,7 @@ Base.@kwdef struct LiveConfig
     N::Int = 81
     fast_n::Bool = true
     backend::Symbol = :metal
-    convolution::Symbol = :auto
+    convolution::Symbol = :separable
     A::Float32 = 0.7f0
     period::Float32 = 115.0f0
     duty_cycle_percent::Union{Nothing,Float32} = Float32(duty_cycle_percent_from_threshold(ModelParams{Float32}().V))
@@ -195,12 +195,14 @@ end
 function live_config_from_query(params::AbstractDict{String,String})
     seed_value = _get(params, "seed", "")
     seed = isempty(seed_value) ? nothing : parse(Int, seed_value)
+    backend = _parse_symbol(params, "backend", :metal)
+    convolution_default = backend == :cpu ? :fft : :separable
 
     return normalize_live_config(LiveConfig(
         N=_parse_int(params, "N", 81),
         fast_n=_parse_bool(_get(params, "fast_n", "true"), true),
-        backend=_parse_symbol(params, "backend", :metal),
-        convolution=_parse_symbol(params, "conv", :auto),
+        backend=backend,
+        convolution=_parse_symbol(params, "conv", convolution_default),
         A=_parse_float32(params, "A", 0.7f0),
         period=_parse_float32(params, "T", 115.0f0),
         duty_cycle_percent=_parse_optional_float32(params, "duty_cycle"),
@@ -1336,6 +1338,7 @@ const APPLET_HTML = raw"""
       grid-template-columns: 1fr 1fr;
       gap: 16px;
       min-width: 0;
+      align-items: start;
     }
 
     .view {
@@ -1353,7 +1356,7 @@ const APPLET_HTML = raw"""
       justify-content: space-between;
       align-items: baseline;
       gap: 10px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
 
     .view-title {
@@ -1382,7 +1385,7 @@ const APPLET_HTML = raw"""
 
     .canvas-frame {
       position: relative;
-      padding: 54px 44px 44px;
+      padding: 34px 34px 34px;
       border-radius: 14px;
       background:
         radial-gradient(circle at 50% 18%, rgba(0, 158, 170, 0.07), transparent 16rem),
@@ -1399,9 +1402,9 @@ const APPLET_HTML = raw"""
       position: absolute;
       z-index: 2;
       color: #33495c;
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 800;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.04em;
       line-height: 1;
       pointer-events: none;
       text-transform: uppercase;
@@ -1413,7 +1416,7 @@ const APPLET_HTML = raw"""
       background: rgba(255, 255, 255, 0.92);
       border: 1px solid rgba(198, 216, 226, 0.82);
       border-radius: 999px;
-      padding: 4px 7px;
+      padding: 3px 6px;
       box-shadow: 0 6px 18px rgba(25, 56, 82, 0.07);
     }
 
@@ -1422,13 +1425,18 @@ const APPLET_HTML = raw"""
       background: rgba(231, 246, 248, 0.92);
       border: 1px solid rgba(0, 158, 170, 0.18);
       border-radius: 999px;
-      padding: 5px 8px;
+      padding: 4px 7px;
     }
 
     .cortical-frame {
       --left-center: 50%;
       --right-center: 50%;
-      padding-top: 76px;
+      --left-label-y: 12px;
+      --right-label-y: 12px;
+      --left-top-y: 44px;
+      --right-top-y: 44px;
+      --left-bottom-y: calc(100% - 13px);
+      --right-bottom-y: calc(100% - 13px);
     }
 
     .hemi-left,
@@ -1445,18 +1453,32 @@ const APPLET_HTML = raw"""
       transform: translateX(-50%);
     }
 
-    .hemi-label {
-      top: 12px;
+    .hemi-left {
+      top: var(--left-label-y);
     }
 
-    .axis-top-left,
+    .hemi-right {
+      top: var(--right-label-y);
+    }
+
+    .axis-top-left {
+      top: var(--left-top-y);
+    }
+
     .axis-top-right {
-      top: 50px;
+      top: var(--right-top-y);
     }
 
-    .axis-bottom-left,
+    .axis-bottom-left {
+      top: var(--left-bottom-y);
+    }
+
     .axis-bottom-right {
-      bottom: 13px;
+      top: var(--right-bottom-y);
+    }
+
+    .cortical-frame.stacked {
+      padding: 22px 28px;
     }
 
     .cortical-frame:not(.coupled) .hemi-right,
@@ -1478,13 +1500,13 @@ const APPLET_HTML = raw"""
     }
 
     .retinal-angle-0 {
-      right: 12px;
+      right: 4px;
       top: 50%;
       transform: translateY(-50%);
     }
 
     .retinal-angle-180 {
-      left: 12px;
+      left: 4px;
       top: 50%;
       transform: translateY(-50%);
     }
@@ -1537,10 +1559,43 @@ const APPLET_HTML = raw"""
       box-shadow: var(--soft-shadow);
     }
 
+    .legend-wrap {
+      width: min(460px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: auto minmax(140px, 1fr) auto;
+      grid-template-areas:
+        "label label label"
+        "low bar high";
+      gap: 5px 8px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .legend-label {
+      grid-area: label;
+      justify-self: center;
+      color: #0b3146;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .legend-low { grid-area: low; }
+    .legend-high { grid-area: high; }
+    .legend-wrap .legend { grid-area: bar; }
+
     @media (max-width: 940px) {
       main { grid-template-columns: 1fr; padding: 18px; }
       .panel { position: static; }
       .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .views { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 1180px) {
       .views { grid-template-columns: 1fr; }
     }
   </style>
@@ -1564,8 +1619,8 @@ const APPLET_HTML = raw"""
       <div class="control-section">
         <div class="section-title">Backend Implementation</div>
         <div class="control-grid">
-          <label>Backend<select id="backend"><option value="metal">gpu / metal</option><option value="cpu">cpu</option></select></label>
-          <label>Convolution<select id="conv"><option value="auto">auto</option><option value="separable">separable</option><option value="fft">fft</option></select></label>
+          <label>Backend<select id="backend"><option value="metal">GPU (Metal)</option><option value="cpu">CPU</option></select></label>
+          <label>Convolution<select id="conv"><option value="separable">separable</option><option value="fft">FFT</option></select></label>
           <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
           <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
         </div>
@@ -1588,9 +1643,9 @@ const APPLET_HTML = raw"""
       <div class="control-section">
         <div class="section-title">Strobe Parameters</div>
         <div class="control-grid">
-          <label>A<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
-          <label>T (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
-          <label>Duty (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
+          <label>Amplitude<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
+          <label>Period (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
+          <label>Duty cycle (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
         </div>
       </div>
 
@@ -1600,8 +1655,8 @@ const APPLET_HTML = raw"""
           <label class="wide">Field geometry<select id="fieldGeometry"><option value="square">square</option><option value="double_sech">double-sech V1</option></select></label>
           <label id="fieldDensityControl" class="hidden-control">Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
           <label id="nControl">N<input id="n" type="number" min="5" step="2" value="81"></label>
-          <label>Se<input id="se" type="number" min="0.1" step="0.05" value="2"></label>
-          <label>Si<input id="si" type="number" min="0.1" step="0.05" value="5"></label>
+          <label>&sigma;<sub>e</sub><input id="se" type="number" min="0.1" step="0.05" value="2"></label>
+          <label>&sigma;<sub>i</sub><input id="si" type="number" min="0.1" step="0.05" value="5"></label>
           <label>dt (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
         </div>
       </div>
@@ -1609,7 +1664,7 @@ const APPLET_HTML = raw"""
       <div class="kernel-card">
         <div class="view-head"><div class="view-title">Kernel window</div><div class="view-note" id="kernelInfo">-</div></div>
         <canvas id="kernelGraph" class="kernel-canvas"></canvas>
-        <div class="tiny-note">Lines show the excitatory and inhibitory 1D Gaussian kernels. The applet uses the separable product of these kernels in x and y.</div>
+        <div class="tiny-note">Cutoff is measured in sigma units: r<sub>e</sub> = ceil(cutoff x &sigma;<sub>e</sub>) and r<sub>i</sub> = ceil(cutoff x &sigma;<sub>i</sub>). The applet uses the separable product of the 1D kernels in x and y.</div>
       </div>
       <div class="button-row">
         <button id="pausePlay" class="pause">Pause</button>
@@ -1631,7 +1686,7 @@ const APPLET_HTML = raw"""
       </div>
       <div class="views">
         <div class="view">
-          <div class="view-head"><div class="view-title">Cortical sheet</div><div class="view-note" id="range">range -</div></div>
+          <div class="view-head"><div class="view-title">Cortical sheet</div></div>
           <div id="corticalFrame" class="canvas-frame cortical-frame">
             <canvas id="cortical"></canvas>
             <span id="hemiLeft" class="hemi-label hemi-left">Cortical sheet</span>
@@ -1643,7 +1698,7 @@ const APPLET_HTML = raw"""
           </div>
         </div>
         <div class="view">
-          <div class="view-head"><div class="view-title">Retinal view</div><div class="view-note">server-side log-polar map</div></div>
+          <div class="view-head"><div class="view-title">Visual field</div></div>
           <div class="canvas-frame retinal-frame">
             <canvas id="retinal"></canvas>
             <span class="axis-label retinal-angle-90">90&deg;</span>
@@ -1653,7 +1708,12 @@ const APPLET_HTML = raw"""
           </div>
         </div>
       </div>
-      <div id="legend" class="legend"></div>
+      <div class="legend-wrap">
+        <span class="legend-label">Activity</span>
+        <span id="legendLow" class="legend-low">low</span>
+        <div id="legend" class="legend"></div>
+        <span id="legendHigh" class="legend-high">high</span>
+      </div>
     </section>
   </main>
 
@@ -1707,7 +1767,6 @@ const APPLET_HTML = raw"""
       streamFps: document.getElementById("streamFps"),
       msStep: document.getElementById("msStep"),
       rtx: document.getElementById("rtx"),
-      range: document.getElementById("range"),
       stimulusGraph: document.getElementById("stimulusGraph"),
       stimulusInfo: document.getElementById("stimulusInfo"),
       corticalFrame: document.getElementById("corticalFrame"),
@@ -1717,7 +1776,9 @@ const APPLET_HTML = raw"""
       retinal: document.getElementById("retinal"),
       kernelGraph: document.getElementById("kernelGraph"),
       kernelInfo: document.getElementById("kernelInfo"),
-      legend: document.getElementById("legend")
+      legend: document.getElementById("legend"),
+      legendLow: document.getElementById("legendLow"),
+      legendHigh: document.getElementById("legendHigh")
     };
 
     let socket = null;
@@ -1762,6 +1823,13 @@ const APPLET_HTML = raw"""
       els.legend.style.background = `linear-gradient(90deg, ${colorStopString()})`;
     }
 
+    function setOptionAvailable(select, value, available) {
+      const option = Array.from(select.options).find((item) => item.value === value);
+      if (!option) return;
+      option.disabled = !available;
+      option.hidden = !available;
+    }
+
     function setCanvasSize(canvas, rows, cols) {
       if (canvas.width !== cols || canvas.height !== rows) {
         canvas.width = cols;
@@ -1794,10 +1862,23 @@ const APPLET_HTML = raw"""
       image.data[j + 3] = 255;
     }
 
-    function updateCorticalLabels(isCoupled, leftCenter = 50, rightCenter = 50) {
+    function updateCorticalLabels(isCoupled, leftCenter = 50, rightCenter = 50, positions = null) {
       els.corticalFrame.classList.toggle("coupled", isCoupled);
+      els.corticalFrame.classList.toggle("stacked", isCoupled);
       els.corticalFrame.style.setProperty("--left-center", `${leftCenter}%`);
       els.corticalFrame.style.setProperty("--right-center", `${rightCenter}%`);
+      if (positions) {
+        Object.entries(positions).forEach(([key, value]) => {
+          els.corticalFrame.style.setProperty(key, value);
+        });
+      } else {
+        els.corticalFrame.style.setProperty("--left-label-y", "12px");
+        els.corticalFrame.style.setProperty("--right-label-y", "12px");
+        els.corticalFrame.style.setProperty("--left-top-y", "44px");
+        els.corticalFrame.style.setProperty("--right-top-y", "44px");
+        els.corticalFrame.style.setProperty("--left-bottom-y", "calc(100% - 13px)");
+        els.corticalFrame.style.setProperty("--right-bottom-y", "calc(100% - 13px)");
+      }
       els.hemiLeft.textContent = isCoupled ? "Left hemisphere" : "Cortical sheet";
       els.hemiRight.textContent = "Right hemisphere";
     }
@@ -1811,17 +1892,24 @@ const APPLET_HTML = raw"""
       }
 
       const hemiCols = Math.floor(cols / 2);
-      const gapCols = Math.max(6, Math.round(rows * 0.08));
-      const drawCols = cols + gapCols;
-      setCanvasSize(canvas, rows, drawCols);
-      updateCorticalLabels(
-        true,
-        (hemiCols / 2) / drawCols * 100,
-        (hemiCols + gapCols + hemiCols / 2) / drawCols * 100
-      );
+      const gapRows = Math.max(10, Math.round(rows * 0.16));
+      const drawRows = 2 * rows + gapRows;
+      const drawCols = hemiCols;
+      setCanvasSize(canvas, drawRows, drawCols);
+      const yPct = (fraction) => `${(6 + 88 * fraction).toFixed(2)}%`;
+      const topEnd = rows / drawRows;
+      const bottomStart = (rows + gapRows) / drawRows;
+      updateCorticalLabels(true, 50, 50, {
+        "--left-label-y": yPct(0.055),
+        "--left-top-y": yPct(0.16),
+        "--left-bottom-y": yPct(Math.max(0.18, topEnd - 0.045)),
+        "--right-label-y": yPct(bottomStart + 0.055),
+        "--right-top-y": yPct(bottomStart + 0.16),
+        "--right-bottom-y": yPct(0.955)
+      });
 
       const ctx = canvas.getContext("2d");
-      const image = ctx.createImageData(drawCols, rows);
+      const image = ctx.createImageData(drawCols, drawRows);
       for (let i = 0; i < image.data.length; i += 4) {
         image.data[i] = 248;
         image.data[i + 1] = 251;
@@ -1830,9 +1918,13 @@ const APPLET_HTML = raw"""
       }
 
       for (let row = 0; row < rows; row++) {
-        for (let col = 0; col < cols; col++) {
-          const targetCol = col < hemiCols ? col : col + gapCols;
-          setPixel(image, row * drawCols + targetCol, values[row * cols + col]);
+        for (let col = 0; col < hemiCols; col++) {
+          setPixel(image, row * drawCols + col, values[row * cols + col]);
+          setPixel(
+            image,
+            (row + rows + gapRows) * drawCols + col,
+            values[row * cols + hemiCols + col]
+          );
         }
       }
       ctx.putImageData(image, 0, 0);
@@ -1849,7 +1941,8 @@ const APPLET_HTML = raw"""
       els.streamFps.textContent = "0";
       els.msStep.textContent = "0";
       els.rtx.textContent = "0";
-      els.range.textContent = "range -";
+      els.legendLow.textContent = "low";
+      els.legendHigh.textContent = "high";
       lastRateFrameAt = null;
       lastRateSimTime = null;
       drawStimulusGraph(0);
@@ -1901,16 +1994,45 @@ const APPLET_HTML = raw"""
 
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, width, height);
-      ctx.fillStyle = "#f8fbfd";
+      const bg = ctx.createLinearGradient(0, 0, width, height);
+      bg.addColorStop(0, "#ffffff");
+      bg.addColorStop(1, "#eef7f8");
+      ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
-      const padL = 38 * dpr, padR = 18 * dpr, padT = 18 * dpr, padB = 30 * dpr;
+      const padL = 42 * dpr, padR = 20 * dpr, padT = 22 * dpr, padB = 34 * dpr;
       const plotW = width - padL - padR;
       const plotH = height - padT - padB;
       const xToPx = (x) => padL + ((x + maxRadius) / (2 * maxRadius)) * plotW;
       const yToPx = (v) => padT + (1 - v / maxValue) * plotH;
 
-      ctx.strokeStyle = "#dbe7ef";
       ctx.lineWidth = 1 * dpr;
+      ctx.strokeStyle = "#e1edf2";
+      ctx.beginPath();
+      for (let i = 0; i <= 4; i++) {
+        const y = padT + (i / 4) * plotH;
+        ctx.moveTo(padL, y);
+        ctx.lineTo(padL + plotW, y);
+      }
+      ctx.stroke();
+
+      function drawRadius(radius, color) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.2 * dpr;
+        ctx.setLineDash([4 * dpr, 4 * dpr]);
+        [-radius, radius].forEach((xValue) => {
+          const x = xToPx(xValue);
+          ctx.beginPath();
+          ctx.moveTo(x, padT);
+          ctx.lineTo(x, padT + plotH);
+          ctx.stroke();
+        });
+        ctx.setLineDash([]);
+      }
+
+      drawRadius(radiusI, "rgba(243, 179, 61, 0.58)");
+      drawRadius(radiusE, "rgba(0, 158, 170, 0.58)");
+
+      ctx.strokeStyle = "#b9ccd7";
       ctx.beginPath();
       ctx.moveTo(padL, padT + plotH);
       ctx.lineTo(padL + plotW, padT + plotH);
@@ -1935,15 +2057,19 @@ const APPLET_HTML = raw"""
       drawLine("e", "#009eaa");
       ctx.fillStyle = "#607284";
       ctx.font = `${11 * dpr}px IBM Plex Sans, sans-serif`;
-      ctx.fillText(`-r`, padL, height - 10 * dpr);
+      ctx.textAlign = "left";
+      ctx.fillText(`-${maxRadius}`, padL, height - 10 * dpr);
+      ctx.textAlign = "center";
       ctx.fillText(`0`, xToPx(0) - 3 * dpr, height - 10 * dpr);
-      ctx.fillText(`+r`, padL + plotW - 12 * dpr, height - 10 * dpr);
+      ctx.textAlign = "right";
+      ctx.fillText(`+${maxRadius}`, padL + plotW, height - 10 * dpr);
+      ctx.textAlign = "left";
       ctx.fillStyle = "#009eaa";
-      ctx.fillText("Se", padL + 8 * dpr, padT + 14 * dpr);
+      ctx.fillText(`sigma_e, r=${radiusE}`, padL + 8 * dpr, padT + 14 * dpr);
       ctx.fillStyle = "#f3b33d";
-      ctx.fillText("Si", padL + 36 * dpr, padT + 14 * dpr);
+      ctx.fillText(`sigma_i, r=${radiusI}`, padL + 110 * dpr, padT + 14 * dpr);
       els.kernelInfo.textContent =
-        `E r=${radiusE}, I r=${radiusI}; retained ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%`;
+        `r_e=ceil(${cutoff} x ${se})=${radiusE}; r_i=ceil(${cutoff} x ${si})=${radiusI}; mass ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%`;
     }
 
     function drawRetinal(canvas, values, rows, cols) {
@@ -2028,7 +2154,7 @@ const APPLET_HTML = raw"""
       ctx.textAlign = "right";
       ctx.fillText("+0.25 s", padL + plotW, height - 5 * dpr);
       ctx.textAlign = "left";
-      els.stimulusInfo.textContent = `A=${streamStimulus.A.toFixed(2)}, T=${streamStimulus.period.toFixed(1)} ms, duty=${streamStimulus.duty.toFixed(1)}%`;
+      els.stimulusInfo.textContent = `amplitude=${streamStimulus.A.toFixed(2)}, period=${streamStimulus.period.toFixed(1)} ms, duty cycle=${streamStimulus.duty.toFixed(1)}%`;
     }
 
     function drawCurrentFrame() {
@@ -2055,6 +2181,7 @@ const APPLET_HTML = raw"""
     }
 
     function streamParams() {
+      syncConvolutionControls();
       const params = new URLSearchParams();
       const isDoubleSech = els.fieldGeometry.value === "double_sech";
       params.set("field_geometry", els.fieldGeometry.value);
@@ -2105,8 +2232,47 @@ const APPLET_HTML = raw"""
       els.boundaryY.disabled = isDoubleSech;
     }
 
+    function syncConvolutionControls() {
+      const isDoubleSech = els.fieldGeometry.value === "double_sech";
+      if (isDoubleSech) {
+        els.backend.value = "metal";
+      }
+      els.backend.disabled = isDoubleSech;
+
+      const isCpu = els.backend.value === "cpu";
+      const squareUsesNonPeriodic =
+        !isDoubleSech && (els.boundaryX.value !== "periodic" || els.boundaryY.value !== "periodic");
+
+      if (isCpu) {
+        els.boundaryX.value = "periodic";
+        els.boundaryY.value = "periodic";
+        els.boundaryX.disabled = true;
+        els.boundaryY.disabled = true;
+      } else if (!isDoubleSech) {
+        els.boundaryX.disabled = false;
+        els.boundaryY.disabled = false;
+      }
+
+      if (isDoubleSech || squareUsesNonPeriodic) {
+        els.conv.value = "separable";
+        els.conv.disabled = true;
+        setOptionAvailable(els.conv, "separable", true);
+        setOptionAvailable(els.conv, "fft", false);
+      } else if (isCpu) {
+        els.conv.value = "fft";
+        els.conv.disabled = true;
+        setOptionAvailable(els.conv, "separable", false);
+        setOptionAvailable(els.conv, "fft", true);
+      } else {
+        setOptionAvailable(els.conv, "separable", true);
+        setOptionAvailable(els.conv, "fft", true);
+        els.conv.disabled = false;
+      }
+    }
+
     function applyGeometryDefaults() {
       syncGeometryControls();
+      syncConvolutionControls();
       if (els.fieldGeometry.value !== "double_sech") return;
       els.backend.value = "metal";
       els.conv.value = "separable";
@@ -2164,7 +2330,7 @@ const APPLET_HTML = raw"""
           const geometryText = msg.fieldGeometry === "double_sech" ? `, double-sech V1 density ${msg.fieldDensity}` : "";
           const boundaryText = msg.boundaryX === msg.boundaryY ? `boundary:${msg.boundaryX}` : `x:${msg.boundaryX} y:${msg.boundaryY}`;
           const reflectText = (msg.boundaryX === "partial_reflect" || msg.boundaryY === "partial_reflect") ? ` reflect=${msg.partialReflectStrength}` : "";
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, Se=${msg.Se}, Si=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, sigma_e=${msg.Se}, sigma_i=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {
@@ -2199,7 +2365,8 @@ const APPLET_HTML = raw"""
         els.streamFps.textContent = observedFps.toFixed(1);
         els.msStep.textContent = msg.msPerStep.toFixed(3);
         els.rtx.textContent = actualRealtimeX.toFixed(2);
-        els.range.textContent = `${msg.min.toFixed(3)} to ${msg.max.toFixed(3)}`;
+        els.legendLow.textContent = msg.min.toFixed(3);
+        els.legendHigh.textContent = msg.max.toFixed(3);
         drawStimulusGraph(msg.t);
       };
 
@@ -2282,6 +2449,9 @@ const APPLET_HTML = raw"""
     els.fieldGeometry.addEventListener("change", () => {
       applyGeometryDefaults();
       resetStream();
+    });
+    [els.backend, els.boundary, els.boundaryX, els.boundaryY].forEach((el) => {
+      el.addEventListener("change", syncConvolutionControls);
     });
     els.fps.addEventListener("input", () => queueVisualizationUpdate(160));
     els.speed.addEventListener("change", () => queueVisualizationUpdate(0));

@@ -351,10 +351,22 @@ end
 @testset "live applet config" begin
     periodic_config = live_config_from_query(Dict(
         "backend" => "metal",
-        "conv" => "auto",
     ))
     @test periodic_config.backend == :metal
-    @test periodic_config.convolution == :fft
+    @test periodic_config.convolution == :separable
+
+    auto_config = live_config_from_query(Dict(
+        "backend" => "metal",
+        "conv" => "auto",
+    ))
+    @test auto_config.backend == :metal
+    @test auto_config.convolution == :fft
+
+    cpu_default_config = live_config_from_query(Dict(
+        "backend" => "cpu",
+    ))
+    @test cpu_default_config.backend == :cpu
+    @test cpu_default_config.convolution == :fft
 
     config = live_config_from_query(Dict(
         "backend" => "gpu",
@@ -444,6 +456,11 @@ end
         @test response.status == 200
         @test occursin("Real-time Strobe Hallucination Simulator", body)
         @test occursin("Rule-Ermentrout-Stroffegen", body)
+        @test occursin("GPU (Metal)", body)
+        @test occursin("Amplitude", body)
+        @test occursin("Period (ms)", body)
+        @test occursin("Duty cycle (%)", body)
+        @test occursin("&sigma;<sub>e</sub>", body)
         @test occursin("id=\"dt\"", body)
         @test occursin("value=\"no_connection\"", body)
         @test occursin("value=\"overlap\"", body)
@@ -455,11 +472,15 @@ end
         @test occursin("id=\"fieldGeometry\"", body)
         @test occursin("id=\"fieldDensityControl\"", body)
         @test occursin("id=\"nControl\"", body)
+        @test occursin("id=\"legendLow\"", body)
+        @test occursin("id=\"legendHigh\"", body)
         @test occursin("id=\"boundaryControl\"", body)
         @test occursin("id=\"boundaryXControl\"", body)
         @test occursin("id=\"partialReflectStrength\"", body)
         @test occursin("value=\"double_sech\"", body)
         @test occursin("value=\"partial_reflect\"", body)
+        @test !occursin("value=\"auto\"", body)
+        @test !occursin("server-side log-polar map", body)
         @test occursin("event.code === \"Space\"", body)
         @test occursin("event.code === \"Enter\"", body)
         @test !occursin("id=\"dtMetric\"", body)
