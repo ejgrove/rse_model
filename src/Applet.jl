@@ -1656,7 +1656,6 @@ const APPLET_HTML = raw"""
       top: var(--right-ecc-y);
     }
 
-    .cortical-frame:not(.double-sech) .cortical-ecc,
     .cortical-frame:not(.coupled) .cortical-fovea-right,
     .cortical-frame:not(.coupled) .cortical-periphery-right {
       display: none;
@@ -1695,24 +1694,6 @@ const APPLET_HTML = raw"""
       left: 12px;
       top: 50%;
       transform: translateY(-50%);
-    }
-
-    .retinal-ecc {
-      font-size: 9px;
-      color: #607284;
-      background: rgba(255, 255, 255, 0.76);
-      border-color: rgba(198, 216, 226, 0.55);
-    }
-
-    .retinal-fovea {
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-    }
-
-    .retinal-periphery {
-      right: 8px;
-      bottom: 8px;
     }
 
     .frame-card {
@@ -1939,8 +1920,6 @@ const APPLET_HTML = raw"""
             <span class="axis-label retinal-angle-0">0&deg;</span>
             <span class="axis-label retinal-angle-180">180&deg;</span>
             <span class="axis-label retinal-angle-270">270&deg;</span>
-            <span class="ecc-label retinal-ecc retinal-fovea">fovea</span>
-            <span class="ecc-label retinal-ecc retinal-periphery">periphery</span>
           </div>
         </div>
       </div>
@@ -3125,6 +3104,9 @@ const APPLET_HTML = raw"""
       el.addEventListener("input", drawFieldGraph);
       el.addEventListener("change", drawFieldGraph);
     });
+    [
+      els.coupling, els.overlapRows, els.couplingStrength
+    ].forEach((el) => el.addEventListener("change", resetStream));
     window.addEventListener("resize", () => {
       drawKernelGraph();
       drawStimulusGraph(lastDisplayFrame?.t || 0);
