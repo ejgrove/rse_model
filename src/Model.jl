@@ -224,6 +224,22 @@ function _apply_masked_midline_coupling!(Ue_left, Ui_left, Ue_right, Ui_right, m
     return Ue_left, Ui_left, Ue_right, Ui_right
 end
 
+function _apply_border_coupling!(Ue_left, Ui_left, Ue_right, Ui_right, border_mask, strength)
+    strength <= 0 && return Ue_left, Ui_left, Ue_right, Ui_right
+    rows, cols = size(Ue_left)
+    mix = eltype(Ue_left)(strength)
+
+    @inbounds for col in 1:cols, row in 1:rows
+        border_mask[row, col] || continue
+        right_row = rows - row + 1
+        border_mask[right_row, col] || continue
+        _mix_pair!(Ue_left, Ue_right, row, right_row, col, mix)
+        _mix_pair!(Ui_left, Ui_right, row, right_row, col, mix)
+    end
+
+    return Ue_left, Ui_left, Ue_right, Ui_right
+end
+
 function _mix_pair!(left, right, left_row, right_row, col, mix)
     left_value = left[left_row, col]
     right_value = right[right_row, col]
@@ -842,6 +858,38 @@ function _metal_masked_midline_coupling_kernel!(
     return
 end
 
+function _metal_border_coupling_kernel!(
+    Ue_left,
+    Ui_left,
+    Ue_right,
+    Ui_right,
+    border_mask,
+    strength,
+    rows,
+    n,
+)
+    i = thread_position_in_grid().x
+    if i <= n && border_mask[i] > 0.5f0
+        row0 = (i - UInt32(1)) % rows
+        col0 = (i - UInt32(1)) ÷ rows
+        right_row0 = rows - row0 - UInt32(1)
+        right_idx = right_row0 + col0 * rows + UInt32(1)
+
+        if border_mask[right_idx] > 0.5f0
+            left_e = Ue_left[i]
+            right_e = Ue_right[right_idx]
+            left_i = Ui_left[i]
+            right_i = Ui_right[right_idx]
+
+            Ue_left[i] = left_e + strength * (right_e - left_e)
+            Ue_right[right_idx] = right_e + strength * (left_e - right_e)
+            Ui_left[i] = left_i + strength * (right_i - left_i)
+            Ui_right[right_idx] = right_i + strength * (left_i - right_i)
+        end
+    end
+    return
+end
+
 function apply_midline_coupling!(
     Ue_left,
     Ui_left,
@@ -868,6 +916,35 @@ function apply_midline_coupling!(
         UInt32(cols_u),
         UInt32(band_rows_u),
         UInt32(n_pairs),
+    )
+
+    return Ue_left, Ui_left, Ue_right, Ui_right
+end
+
+function apply_border_coupling!(
+    Ue_left,
+    Ui_left,
+    Ue_right,
+    Ui_right,
+    border_mask;
+    strength::Real,
+    gpu_threads::Integer=256,
+)
+    strength <= 0 && return Ue_left, Ui_left, Ue_right, Ui_right
+    rows_u, _ = size(Ue_left)
+    n = length(Ue_left)
+    threads = min(gpu_threads, n)
+    groups = cld(n, threads)
+
+    @metal threads=threads groups=groups _metal_border_coupling_kernel!(
+        Ue_left,
+        Ui_left,
+        Ue_right,
+        Ui_right,
+        border_mask,
+        Float32(strength),
+        UInt32(rows_u),
+        UInt32(n),
     )
 
     return Ue_left, Ui_left, Ue_right, Ui_right

@@ -39,6 +39,10 @@ end
     @test 0 < count(v1.mask) < length(v1.mask)
     col_counts = [count(@view v1.mask[:, col]) for col in axes(v1.mask, 2)]
     @test col_counts[findlast(>(0), col_counts)] <= 3
+    border = RSEModel.field_border_mask(v1.mask, 3)
+    @test size(border) == size(v1.mask)
+    @test 0 < count(border) < count(v1.mask)
+    @test all(border .<= v1.mask)
 
     dense = field_geometry(:double_sech; density=1.5)
     @test dense.rows > v1.rows
@@ -63,6 +67,12 @@ end
     @test blended_ret[16, 16] ≈ 15.0f0
     @test blended_ret[16, 28] ≈ 10.0f0
     @test blended_ret[16, 4] ≈ 20.0f0
+
+    row_values = repeat(reshape(collect(Float32, 1:v1.rows), v1.rows, 1), 1, v1.cols)
+    left_row_ret = double_sech_retinal_transform(row_values, zeros(Float32, size(v1.mask)), v1; output_size=(31, 31), seam_blend_pixels=0)
+    right_row_ret = double_sech_retinal_transform(zeros(Float32, size(v1.mask)), row_values, v1; output_size=(31, 31), seam_blend_pixels=0)
+    @test left_row_ret[8, 24] < left_row_ret[24, 24]
+    @test right_row_ret[8, 8] > right_row_ret[24, 8]
 
     U = ones(Float32, size(v1.mask))
     apply_field_mask!(U, v1)
@@ -117,6 +127,22 @@ end
     @test masked_right_e[2, 1] == 3.0f0
     @test masked_left_e[1, 2] == 1.5f0
     @test masked_right_i[2, 2] == 3.5f0
+
+    border_left_e = fill(1.0f0, 5, 3)
+    border_left_i = fill(2.0f0, 5, 3)
+    border_right_e = fill(3.0f0, 5, 3)
+    border_right_i = fill(4.0f0, 5, 3)
+    border_mask = falses(5, 3)
+    border_mask[1, 2] = true
+    border_mask[5, 2] = true
+    border_mask[3, 1] = true
+    border_mask[3, 3] = true
+    RSEModel._apply_border_coupling!(border_left_e, border_left_i, border_right_e, border_right_i, border_mask, 0.25f0)
+    @test border_left_e[1, 2] == 1.5f0
+    @test border_right_e[5, 2] == 2.5f0
+    @test border_left_i[5, 2] == 2.5f0
+    @test border_right_i[1, 2] == 3.5f0
+    @test border_left_e[2, 2] == 1.0f0
 end
 
 @testset "coupled live view orientation" begin
@@ -567,6 +593,9 @@ end
         @test occursin("value=\"partial_reflect\"", body)
         @test occursin("function formatSimTime", body)
         @test occursin("function drawFieldGraph", body)
+        @test occursin("fovea", body)
+        @test occursin("periphery", body)
+        @test occursin("cortical-fovea-left", body)
         @test !occursin("value=\"auto\"", body)
         @test !occursin("Boundary / Coupling", body)
         @test !occursin("server-side log-polar map", body)

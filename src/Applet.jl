@@ -507,6 +507,8 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
     activity_right = similar(Ue_right)
     display_activity = Matrix{Float32}(undef, rows, 2cols)
     retinal_source = Matrix{Float32}(undef, 2rows, cols)
+    border_coupling_mask = has_field_mask(geometry) ?
+        field_border_mask(geometry.mask, max(1, div(config.overlap_rows, 2))) : nothing
 
     step_idx = 0
     frame_idx = 0
@@ -552,14 +554,13 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
             apply_field_mask!(Ue_right, Ui_right, geometry)
             if _uses_overlap_coupling(config)
                 if has_field_mask(geometry)
-                    _apply_masked_midline_coupling!(
+                    _apply_border_coupling!(
                         Ue_left,
                         Ui_left,
                         Ue_right,
                         Ui_right,
-                        geometry.mask,
+                        border_coupling_mask,
                         config.coupling_strength,
-                        config.overlap_rows,
                     )
                 else
                     _apply_midline_coupling!(
@@ -722,6 +723,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
     Ue_right = Metal.rand(Float32, rows, cols)
     Ui_right = Metal.rand(Float32, rows, cols)
     mask_gpu = has_field_mask(geometry) ? Metal.MtlArray(geometry.mask_float32) : nothing
+    border_mask_gpu = has_field_mask(geometry) ?
+        Metal.MtlArray(Float32.(field_border_mask(geometry.mask, max(1, div(config.overlap_rows, 2))))) : nothing
     if mask_gpu !== nothing
         apply_field_mask!(Ue_left, Ui_left, mask_gpu, config.gpu_threads)
         apply_field_mask!(Ue_right, Ui_right, mask_gpu, config.gpu_threads)
@@ -848,15 +851,14 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
             end
 
             if _uses_overlap_coupling(config)
-                if mask_gpu !== nothing
-                    apply_masked_midline_coupling!(
+                if border_mask_gpu !== nothing
+                    apply_border_coupling!(
                         Ue_left,
                         Ui_left,
                         Ue_right,
                         Ui_right,
-                        mask_gpu;
+                        border_mask_gpu;
                         strength=config.coupling_strength,
-                        overlap_rows=config.overlap_rows,
                         gpu_threads=config.gpu_threads,
                     )
                 else
@@ -1543,7 +1545,8 @@ const APPLET_HTML = raw"""
     }
 
     .axis-label,
-    .hemi-label {
+    .hemi-label,
+    .ecc-label {
       position: absolute;
       z-index: 2;
       color: #33495c;
@@ -1572,6 +1575,16 @@ const APPLET_HTML = raw"""
       padding: 4px 7px;
     }
 
+    .ecc-label {
+      color: #607284;
+      background: rgba(255, 255, 255, 0.78);
+      border: 1px solid rgba(198, 216, 226, 0.52);
+      border-radius: 999px;
+      padding: 3px 6px;
+      text-transform: none;
+      letter-spacing: 0.02em;
+    }
+
     .cortical-frame {
       --left-center: 50%;
       --right-center: 50%;
@@ -1581,6 +1594,8 @@ const APPLET_HTML = raw"""
       --right-top-y: 22px;
       --left-bottom-y: calc(100% - 24px);
       --right-bottom-y: calc(100% - 24px);
+      --left-ecc-y: 50%;
+      --right-ecc-y: 50%;
     }
 
     .hemi-left,
@@ -1621,6 +1636,32 @@ const APPLET_HTML = raw"""
       top: var(--right-bottom-y);
     }
 
+    .cortical-ecc {
+      top: var(--left-ecc-y);
+      transform: translateY(-50%);
+    }
+
+    .cortical-fovea-left,
+    .cortical-fovea-right {
+      left: 7px;
+    }
+
+    .cortical-periphery-left,
+    .cortical-periphery-right {
+      right: 7px;
+    }
+
+    .cortical-fovea-right,
+    .cortical-periphery-right {
+      top: var(--right-ecc-y);
+    }
+
+    .cortical-frame:not(.double-sech) .cortical-ecc,
+    .cortical-frame:not(.coupled) .cortical-fovea-right,
+    .cortical-frame:not(.coupled) .cortical-periphery-right {
+      display: none;
+    }
+
     .cortical-frame.stacked {
       padding: 46px 30px 34px;
     }
@@ -1654,6 +1695,24 @@ const APPLET_HTML = raw"""
       left: 12px;
       top: 50%;
       transform: translateY(-50%);
+    }
+
+    .retinal-ecc {
+      font-size: 9px;
+      color: #607284;
+      background: rgba(255, 255, 255, 0.76);
+      border-color: rgba(198, 216, 226, 0.55);
+    }
+
+    .retinal-fovea {
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    .retinal-periphery {
+      right: 8px;
+      bottom: 8px;
     }
 
     .frame-card {
@@ -1866,6 +1925,10 @@ const APPLET_HTML = raw"""
             <span class="axis-label axis-bottom-left">270&deg;</span>
             <span class="axis-label axis-top-right">90&deg;</span>
             <span class="axis-label axis-bottom-right">270&deg;</span>
+            <span class="ecc-label cortical-ecc cortical-fovea-left">fovea</span>
+            <span class="ecc-label cortical-ecc cortical-periphery-left">periphery</span>
+            <span class="ecc-label cortical-ecc cortical-fovea-right">fovea</span>
+            <span class="ecc-label cortical-ecc cortical-periphery-right">periphery</span>
           </div>
         </div>
         <div class="view">
@@ -1876,6 +1939,8 @@ const APPLET_HTML = raw"""
             <span class="axis-label retinal-angle-0">0&deg;</span>
             <span class="axis-label retinal-angle-180">180&deg;</span>
             <span class="axis-label retinal-angle-270">270&deg;</span>
+            <span class="ecc-label retinal-ecc retinal-fovea">fovea</span>
+            <span class="ecc-label retinal-ecc retinal-periphery">periphery</span>
           </div>
         </div>
       </div>
@@ -2146,8 +2211,10 @@ const APPLET_HTML = raw"""
     }
 
     function updateCorticalLabels(isCoupled, leftCenter = 50, rightCenter = 50, positions = null) {
+      const isDoubleSech = els.fieldGeometry.value === "double_sech";
       els.corticalFrame.classList.toggle("coupled", isCoupled);
       els.corticalFrame.classList.toggle("stacked", isCoupled);
+      els.corticalFrame.classList.toggle("double-sech", isDoubleSech);
       els.corticalFrame.style.setProperty("--left-center", `${leftCenter}%`);
       els.corticalFrame.style.setProperty("--right-center", `${rightCenter}%`);
       if (positions) {
@@ -2161,6 +2228,8 @@ const APPLET_HTML = raw"""
         els.corticalFrame.style.setProperty("--right-top-y", "22px");
         els.corticalFrame.style.setProperty("--left-bottom-y", "calc(100% - 24px)");
         els.corticalFrame.style.setProperty("--right-bottom-y", "calc(100% - 24px)");
+        els.corticalFrame.style.setProperty("--left-ecc-y", "50%");
+        els.corticalFrame.style.setProperty("--right-ecc-y", "50%");
       }
       els.hemiLeft.textContent = isCoupled ? "Left hemisphere" : "Cortical sheet";
       els.hemiRight.textContent = "Right hemisphere";
@@ -2183,9 +2252,11 @@ const APPLET_HTML = raw"""
         "--left-label-y": "9px",
         "--left-top-y": "27px",
         "--left-bottom-y": "calc(50% - 20px)",
+        "--left-ecc-y": "calc(25% + 11px)",
         "--right-label-y": "calc(50% - 8px)",
         "--right-top-y": "calc(50% + 18px)",
-        "--right-bottom-y": "calc(100% - 23px)"
+        "--right-bottom-y": "calc(100% - 23px)",
+        "--right-ecc-y": "calc(75% + 8px)"
       });
 
       const ctx = canvas.getContext("2d");
@@ -2199,11 +2270,12 @@ const APPLET_HTML = raw"""
 
       for (let row = 0; row < rows; row++) {
         for (let col = 0; col < hemiCols; col++) {
+          const rightRow = els.fieldGeometry.value === "double_sech" ? rows - 1 - row : row;
           setPixel(image, row * drawCols + col, values[row * cols + col]);
           setPixel(
             image,
             (row + rows + gapRows) * drawCols + col,
-            values[row * cols + hemiCols + col]
+            values[rightRow * cols + hemiCols + col]
           );
         }
       }
@@ -2447,10 +2519,13 @@ const APPLET_HTML = raw"""
         };
       }
       let n = Math.max(5, Math.round(Number(els.n.value) || 81));
+      const coupled = els.fieldGeometry.value === "double_sech" || els.coupling.value !== "off";
       if (els.fieldGeometry.value === "double_sech") {
         n = Math.max(5, Math.round(81 * (Number(els.fieldDensity.value) || 1)));
+        if (n % 2 === 0) n += 1;
+        const doubleSechCols = Math.max(7, Math.round(n * 1.57));
+        return { rows: n, cols: doubleSechCols % 2 === 0 ? doubleSechCols + 1 : doubleSechCols, coupled };
       }
-      const coupled = els.fieldGeometry.value === "double_sech" || els.coupling.value !== "off";
       return { rows: n, cols: n, coupled };
     }
 
@@ -2503,15 +2578,32 @@ const APPLET_HTML = raw"""
         return Math.abs(xn) <= halfWidth;
       }
 
-      function nodeIsOverlap(row) {
-        return hasOverlap && (row < overlap || row >= rows - overlap);
+      function isDoubleSechBorder(row, col) {
+        if (!inDoubleSechMask(row, col)) return false;
+        const radius = Math.max(1, Math.floor(overlap / 2));
+        for (let dr = -radius; dr <= radius; dr++) {
+          for (let dc = -radius; dc <= radius; dc++) {
+            const rr = row + dr;
+            const cc = col + dc;
+            if (rr < 0 || rr >= rows || cc < 0 || cc >= cols || !inDoubleSechMask(rr, cc)) {
+              return true;
+            }
+          }
+        }
+        return false;
+      }
+
+      function nodeIsOverlap(row, col) {
+        if (!hasOverlap) return false;
+        if (geometry === "double_sech") return isDoubleSechBorder(row, col);
+        return row < overlap || row >= rows - overlap;
       }
 
       function drawSheet(x, y, w, h, label) {
         ctx.strokeStyle = "rgba(13, 38, 56, 0.18)";
         ctx.lineWidth = 1.1 * dpr;
         ctx.strokeRect(x, y, w, h);
-        if (hasOverlap) {
+        if (hasOverlap && geometry !== "double_sech") {
           const band = Math.max(1, overlap / Math.max(rows, 1)) * h;
           ctx.fillStyle = "rgba(243, 179, 61, 0.14)";
           ctx.fillRect(x, y, w, band);
@@ -2525,11 +2617,20 @@ const APPLET_HTML = raw"""
         for (let row = 0; row < rows; row += pointStep) {
           for (let col = 0; col < cols; col += pointStep) {
             if (!inDoubleSechMask(row, col)) continue;
-            ctx.fillStyle = nodeIsOverlap(row) ? "rgba(243, 179, 61, 0.88)" : "rgba(0, 112, 124, 0.62)";
+            ctx.fillStyle = nodeIsOverlap(row, col) ? "rgba(243, 179, 61, 0.88)" : "rgba(0, 112, 124, 0.62)";
             ctx.beginPath();
             ctx.arc(sheetX(col, x, w), sheetY(row, y, h), pointRadius, 0, Math.PI * 2);
             ctx.fill();
           }
+        }
+        if (geometry === "double_sech") {
+          ctx.fillStyle = "#607284";
+          ctx.font = `${9 * dpr}px IBM Plex Sans, sans-serif`;
+          const eccY = y + h + 13 * dpr < height - 4 * dpr ? y + h + 13 * dpr : y - 8 * dpr;
+          ctx.textAlign = "left";
+          ctx.fillText("fovea", x, eccY);
+          ctx.textAlign = "right";
+          ctx.fillText("periphery", x + w, eccY);
         }
       }
 
@@ -2564,15 +2665,20 @@ const APPLET_HTML = raw"""
           if (!inDoubleSechMask(row, col)) continue;
           const theta = Math.PI / 2 - (rows <= 1 ? 0 : row / (rows - 1)) * Math.PI * 2;
           const radius = rMax * (0.08 + 0.9 * (cols <= 1 ? 0 : col / (cols - 1)));
-          ctx.fillStyle = nodeIsOverlap(row) ? "rgba(243, 179, 61, 0.88)" : "rgba(0, 112, 124, 0.46)";
+          ctx.fillStyle = nodeIsOverlap(row, col) ? "rgba(243, 179, 61, 0.88)" : "rgba(0, 112, 124, 0.46)";
           ctx.beginPath();
           ctx.arc(cx + Math.cos(theta) * radius, cy - Math.sin(theta) * radius, pointRadius, 0, Math.PI * 2);
           ctx.fill();
         }
       }
+      ctx.fillStyle = "#607284";
+      ctx.font = `${9 * dpr}px IBM Plex Sans, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText("fovea", cx, cy + 3 * dpr);
+      ctx.fillText("periphery", cx + rMax * 0.72, cy + rMax * 0.72);
 
       els.fieldInfo.textContent =
-        `${rows} x ${cols} nodes${pointStep > 1 ? `, showing every ${pointStep}th node` : ""}${hasOverlap ? `, overlap rows highlighted: ${overlap}` : ""}`;
+        `${rows} x ${cols} nodes${pointStep > 1 ? `, showing every ${pointStep}th node` : ""}${hasOverlap ? `, overlap ${geometry === "double_sech" ? "border ring" : "rows"} highlighted: ${overlap}` : ""}`;
     }
 
     function drawCurrentFrame() {

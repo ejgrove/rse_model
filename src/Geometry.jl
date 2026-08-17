@@ -157,6 +157,32 @@ function apply_field_mask!(Ue::AbstractMatrix, Ui::AbstractMatrix, geometry::Fie
     return Ue, Ui
 end
 
+function field_border_mask(mask::AbstractMatrix{Bool}, width::Integer)
+    rows, cols = size(mask)
+    border = falses(rows, cols)
+    radius = max(0, width)
+    radius == 0 && return border
+
+    @inbounds for col in 1:cols, row in 1:rows
+        mask[row, col] || continue
+        is_border = false
+        for dc in -radius:radius
+            is_border && break
+            cc = col + dc
+            for dr in -radius:radius
+                rr = row + dr
+                if rr < 1 || rr > rows || cc < 1 || cc > cols || !mask[rr, cc]
+                    is_border = true
+                    break
+                end
+            end
+        end
+        border[row, col] = is_border
+    end
+
+    return border
+end
+
 function _sample_bilinear_zero(img::AbstractMatrix, mask::AbstractMatrix{Bool}, y::Float64, x::Float64)
     rows, cols = size(img)
     if x < 1 || y < 1 || x > cols || y > rows
@@ -228,8 +254,9 @@ function _double_sech_grid_position(geometry::FieldGeometry, eccentricity::Real,
     return y, x
 end
 
-function _double_sech_sample(activity::AbstractMatrix, geometry::FieldGeometry, eccentricity::Real, polar::Real)
-    y_source, x_source = _double_sech_grid_position(geometry, eccentricity, polar)
+function _double_sech_sample(activity::AbstractMatrix, geometry::FieldGeometry, eccentricity::Real, polar::Real; flip_angular_axis::Bool=false)
+    source_polar = flip_angular_axis ? -polar : polar
+    y_source, x_source = _double_sech_grid_position(geometry, eccentricity, source_polar)
     return _sample_bilinear_masked(activity, geometry.mask, y_source, x_source)
 end
 
@@ -239,6 +266,7 @@ function double_sech_retinal_transform(
     geometry::FieldGeometry;
     output_size=(geometry.rows, geometry.rows),
     seam_blend_pixels::Real=1,
+    flip_right_angular_axis::Bool=true,
 )
     geometry.kind == :double_sech || throw(ArgumentError("double_sech_retinal_transform requires double-sech geometry."))
     height, width = output_size
@@ -260,12 +288,27 @@ function double_sech_retinal_transform(
         polar = r < 1e-9 ? 0.0 : atan(y_visual, abs(x_visual))
         if seam_blend_width > 0 && abs(x_visual) <= seam_blend_width
             left_value = _double_sech_sample(left_activity, geometry, eccentricity, polar)
-            right_value = _double_sech_sample(right_activity, geometry, eccentricity, polar)
+            right_value = _double_sech_sample(
+                right_activity,
+                geometry,
+                eccentricity,
+                polar;
+                flip_angular_axis=flip_right_angular_axis,
+            )
             left_weight = clamp(0.5 + 0.5 * x_visual / seam_blend_width, 0.0, 1.0)
             output[row, col] = T((1 - left_weight) * right_value + left_weight * left_value)
         else
-            source = x_visual > 0 ? left_activity : right_activity
-            output[row, col] = T(_double_sech_sample(source, geometry, eccentricity, polar))
+            if x_visual > 0
+                output[row, col] = T(_double_sech_sample(left_activity, geometry, eccentricity, polar))
+            else
+                output[row, col] = T(_double_sech_sample(
+                    right_activity,
+                    geometry,
+                    eccentricity,
+                    polar;
+                    flip_angular_axis=flip_right_angular_axis,
+                ))
+            end
         end
     end
 
