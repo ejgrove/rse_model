@@ -26,6 +26,7 @@ Base.@kwdef struct LiveConfig
     overlap_rows::Int = 6
     field_geometry::Symbol = :square
     field_density::Float64 = 1.0
+    activity_scale::Symbol = :frame
     max_frames::Int = 0
 end
 
@@ -52,6 +53,9 @@ end
 Base.@kwdef mutable struct LiveRuntime
     target_fps::Int = 30
     speed::Float64 = 1.0
+    activity_scale::Symbol = :frame
+    scale_lo::Float32 = Float32(Inf)
+    scale_hi::Float32 = -Float32(Inf)
     throttle_deadline_ns::UInt64 = 0
     control_version::Int = 0
 end
@@ -80,6 +84,7 @@ function normalize_live_config(config::LiveConfig)
     end
     _validate_boundaries(boundary_x, boundary_y, convolution, backend)
     coupling = _normalize_live_coupling(config.coupling)
+    activity_scale = _normalize_activity_scale(config.activity_scale)
 
     target_fps = max(1, config.target_fps)
     N = if geometry_kind == :double_sech
@@ -127,6 +132,7 @@ function normalize_live_config(config::LiveConfig)
         overlap_rows=overlap_rows,
         field_geometry=geometry_kind,
         field_density=config.field_density,
+        activity_scale=activity_scale,
         max_frames=config.max_frames,
     )
 end
@@ -144,6 +150,12 @@ end
 
 function _uses_overlap_coupling(config::LiveConfig)
     return config.coupling == :overlap && config.coupling_strength > 0
+end
+
+function _normalize_activity_scale(scale::Symbol)
+    scale in (:frame, :local) && return :frame
+    scale in (:simulation, :sim, :global) && return :simulation
+    throw(ArgumentError("activity_scale must be :frame or :simulation."))
 end
 
 function _parse_bool(value::AbstractString, default::Bool)
@@ -223,6 +235,7 @@ function live_config_from_query(params::AbstractDict{String,String})
         overlap_rows=_parse_int(params, "overlap_rows", 6),
         field_geometry=_parse_symbol(params, "field_geometry", _parse_symbol(params, "geometry", :square)),
         field_density=_parse_float(params, "field_density", 1.0),
+        activity_scale=_parse_symbol(params, "activity_scale", :frame),
         max_frames=_parse_int(params, "max_frames", 0),
     ))
 end
@@ -232,7 +245,11 @@ function _live_model_params(config::LiveConfig)
 end
 
 function _live_runtime(config::LiveConfig)
-    return LiveRuntime(target_fps=config.target_fps, speed=config.speed)
+    return LiveRuntime(
+        target_fps=config.target_fps,
+        speed=config.speed,
+        activity_scale=config.activity_scale,
+    )
 end
 
 function _live_field_geometry(config::LiveConfig)
@@ -266,6 +283,19 @@ function _activity_bytes(activity::AbstractMatrix; lo=nothing, hi=nothing)
     return bytes, lo_value, hi_value
 end
 
+function _activity_scale_bounds!(runtime::Union{Nothing,LiveRuntime}, activity::AbstractMatrix)
+    frame_lo = Float32(minimum(activity))
+    frame_hi = Float32(maximum(activity))
+    runtime === nothing && return frame_lo, frame_hi
+
+    runtime.scale_lo = min(runtime.scale_lo, frame_lo)
+    runtime.scale_hi = max(runtime.scale_hi, frame_hi)
+    if runtime.activity_scale == :simulation
+        return runtime.scale_lo, runtime.scale_hi
+    end
+    return frame_lo, frame_hi
+end
+
 function _make_live_frame(
     activity::AbstractMatrix,
     frame_idx::Integer,
@@ -275,8 +305,11 @@ function _make_live_frame(
     steps_per_frame::Integer,
     p::ModelParams,
     retinal_activity::AbstractMatrix=activity,
+    ;
+    runtime::Union{Nothing,LiveRuntime}=nothing,
 )
-    bytes, lo, hi = _activity_bytes(activity)
+    scale_lo, scale_hi = _activity_scale_bounds!(runtime, activity)
+    bytes, lo, hi = _activity_bytes(activity; lo=scale_lo, hi=scale_hi)
     retinal_bytes, _, _ = retinal_activity === activity ? (bytes, lo, hi) : _activity_bytes(retinal_activity; lo=lo, hi=hi)
     frame_ms = (time_ns() - frame_start_ns) / 1e6
     sim_ms = steps_per_frame * Float64(p.dt)
@@ -427,7 +460,17 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::Liv
         activity = abs.(Ue .- Ui)
         retinal_activity = retinal_transform(activity; output_size=(config.N, config.N))
         t = Float32(step_idx) * p.dt
-        frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
+        frame = _make_live_frame(
+            activity,
+            frame_idx,
+            t,
+            step_ms,
+            frame_start,
+            steps_per_frame,
+            p,
+            retinal_activity;
+            runtime=runtime,
+        )
         callback(frame) === false && break
         _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
     end
@@ -535,7 +578,8 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
             frame_start,
             steps_per_frame,
             p,
-            retinal_activity,
+            retinal_activity;
+            runtime=runtime,
         )
         callback(frame) === false && break
         _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
@@ -635,7 +679,17 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
         activity = Array(cortical_gpu)
         retinal_activity = retinal_transform(activity; output_size=(config.N, config.N))
         t = Float32(step_idx) * p.dt
-        frame = _make_live_frame(activity, frame_idx, t, step_ms, frame_start, steps_per_frame, p, retinal_activity)
+        frame = _make_live_frame(
+            activity,
+            frame_idx,
+            t,
+            step_ms,
+            frame_start,
+            steps_per_frame,
+            p,
+            retinal_activity;
+            runtime=runtime,
+        )
         callback(frame) === false && break
         _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
     end
@@ -817,7 +871,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
             frame_start,
             steps_per_frame,
             p,
-            retinal_activity,
+            retinal_activity;
+            runtime=runtime,
         )
         callback(frame) === false && break
         _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
@@ -879,6 +934,7 @@ function _hello_json(config::LiveConfig)
         ",\"overlapRows\":", config.overlap_rows,
         ",\"fieldGeometry\":", _json_string(config.field_geometry),
         ",\"fieldDensity\":", _json_number(config.field_density; digits=3),
+        ",\"activityScale\":", _json_string(config.activity_scale),
         "}",
     )
 end
@@ -950,6 +1006,12 @@ function _apply_visual_control!(runtime::LiveRuntime, message::AbstractString)
                 speed = parse(Float64, value)
                 if speed >= 0 && speed != runtime.speed
                     runtime.speed = speed
+                    runtime.control_version += 1
+                end
+            elseif key == "activity_scale"
+                scale = _normalize_activity_scale(Symbol(lowercase(value)))
+                if scale != runtime.activity_scale
+                    runtime.activity_scale = scale
                     runtime.control_version += 1
                 end
             end
@@ -1619,6 +1681,7 @@ const APPLET_HTML = raw"""
           <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
           <label>Speed<select id="speed"><option value="1">1x real time</option><option value="0.5">0.5x</option><option value="2">2x</option><option value="0">max</option></select></label>
           <label class="wide">Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
+          <label class="wide">Activity scale<select id="activityScale"><option value="frame">frame min/max</option><option value="simulation">simulation min/max</option></select></label>
         </div>
       </div>
 
@@ -1756,6 +1819,7 @@ const APPLET_HTML = raw"""
       couplingStrength: document.getElementById("couplingStrength"),
       overlapRows: document.getElementById("overlapRows"),
       colorMap: document.getElementById("colorMap"),
+      activityScale: document.getElementById("activityScale"),
       se: document.getElementById("se"),
       si: document.getElementById("si"),
       dt: document.getElementById("dt"),
@@ -2197,6 +2261,7 @@ const APPLET_HTML = raw"""
       params.set("fps", els.fps.value);
       params.set("backend", els.backend.value);
       params.set("conv", els.conv.value);
+      params.set("activity_scale", els.activityScale.value);
       if (isDoubleSech) {
         params.set("boundary", els.boundary.value);
       } else {
@@ -2285,9 +2350,11 @@ const APPLET_HTML = raw"""
       visualizationUpdateTimer = null;
       const fps = Math.max(1, Math.round(Number(els.fps.value) || 30));
       const speed = Math.max(0, Number(els.speed.value) || 0);
+      const activityScale = els.activityScale.value === "simulation" ? "simulation" : "frame";
       if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(`visual:fps=${fps}&speed=${speed}`);
-        els.status.textContent = `Updated visualization: target ${fps} fps, target speed ${speed === 0 ? "max" : `${speed}x`}. Simulation state preserved.`;
+        socket.send(`visual:fps=${fps}&speed=${speed}&activity_scale=${activityScale}`);
+        const scaleText = activityScale === "simulation" ? "simulation min/max" : "frame min/max";
+        els.status.textContent = `Updated visualization: target ${fps} fps, target speed ${speed === 0 ? "max" : `${speed}x`}, activity scale ${scaleText}. Simulation state preserved.`;
       }
     }
 
@@ -2330,10 +2397,12 @@ const APPLET_HTML = raw"""
           };
           drawStimulusGraph(0);
           const speedText = msg.speed === 0 ? "max speed" : `${msg.speed}x speed`;
+          if (msg.activityScale) els.activityScale.value = msg.activityScale;
+          const scaleText = msg.activityScale === "simulation" ? "simulation min/max" : "frame min/max";
           const geometryText = msg.fieldGeometry === "double_sech" ? `, double-sech V1 density ${msg.fieldDensity}` : "";
           const boundaryText = msg.boundaryX === msg.boundaryY ? `boundary:${msg.boundaryX}` : `x:${msg.boundaryX} y:${msg.boundaryY}`;
           const reflectText = (msg.boundaryX === "partial_reflect" || msg.boundaryY === "partial_reflect") ? ` reflect=${msg.partialReflectStrength}` : "";
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, \u03c3\u2091=${msg.Se}, \u03c3\u1d62=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, \u03c3\u2091=${msg.Se}, \u03c3\u1d62=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${scaleText}, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {
@@ -2458,6 +2527,7 @@ const APPLET_HTML = raw"""
     });
     els.fps.addEventListener("input", () => queueVisualizationUpdate(160));
     els.speed.addEventListener("change", () => queueVisualizationUpdate(0));
+    els.activityScale.addEventListener("change", () => queueVisualizationUpdate(0));
     els.colorMap.addEventListener("change", () => {
       updateLegend();
       drawCurrentFrame();

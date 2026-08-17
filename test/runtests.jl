@@ -385,6 +385,7 @@ end
         "coupling" => "midline",
         "coupling_strength" => "0.03",
         "overlap_rows" => "5",
+        "activity_scale" => "simulation",
     ))
     @test config.backend == :metal
     @test config.convolution == :separable
@@ -401,6 +402,7 @@ end
     @test config.coupling == :overlap
     @test config.coupling_strength == 0.03f0
     @test config.overlap_rows == 6
+    @test config.activity_scale == :simulation
 
     disconnected_config = live_config_from_query(Dict(
         "backend" => "metal",
@@ -417,10 +419,53 @@ end
     @test legacy_config.boundary_y == :edge
 
     runtime = RSEModel.LiveRuntime()
-    @test RSEModel._apply_visual_control!(runtime, "visual:fps=12&speed=0.5")
+    @test RSEModel._apply_visual_control!(runtime, "visual:fps=12&speed=0.5&activity_scale=simulation")
     @test runtime.target_fps == 12
     @test runtime.speed == 0.5
+    @test runtime.activity_scale == :simulation
+    @test RSEModel._apply_visual_control!(runtime, "visual:activity_scale=frame")
+    @test runtime.activity_scale == :frame
     @test !RSEModel._apply_visual_control!(runtime, "pause")
+
+    p = ModelParams{Float32}()
+    scale_runtime = RSEModel.LiveRuntime(activity_scale=:simulation)
+    first_frame = RSEModel._make_live_frame(
+        Float32[1 2; 3 4],
+        1,
+        0.0f0,
+        1.0,
+        time_ns(),
+        1,
+        p;
+        runtime=scale_runtime,
+    )
+    second_frame = RSEModel._make_live_frame(
+        Float32[2 3; 5 6],
+        2,
+        1.0f0,
+        1.0,
+        time_ns(),
+        1,
+        p;
+        runtime=scale_runtime,
+    )
+    @test first_frame.lo == 1.0f0
+    @test first_frame.hi == 4.0f0
+    @test second_frame.lo == 1.0f0
+    @test second_frame.hi == 6.0f0
+
+    local_frame = RSEModel._make_live_frame(
+        Float32[2 3; 5 6],
+        1,
+        0.0f0,
+        1.0,
+        time_ns(),
+        1,
+        p;
+        runtime=RSEModel.LiveRuntime(activity_scale=:frame),
+    )
+    @test local_frame.lo == 2.0f0
+    @test local_frame.hi == 6.0f0
 
     double_sech_config = live_config_from_query(Dict(
         "backend" => "metal",
@@ -467,6 +512,7 @@ end
         @test occursin("id=\"corticalFrame\"", body)
         @test occursin("retinal-angle-90", body)
         @test occursin("id=\"colorMap\"", body)
+        @test occursin("id=\"activityScale\"", body)
         @test occursin("nipy_spectral", body)
         @test occursin("id=\"stimulusGraph\"", body)
         @test occursin("id=\"fieldGeometry\"", body)
@@ -487,7 +533,7 @@ end
         @test !occursin("id=\"gridN\"", body)
 
         address = "127.0.0.1:$(HTTP.port(server))"
-        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1") do ws
+        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1&activity_scale=simulation") do ws
             hello = String(HTTP.WebSockets.receive(ws))
             frame = String(HTTP.WebSockets.receive(ws))
             @test occursin("\"type\":\"hello\"", hello)
@@ -496,6 +542,7 @@ end
             @test occursin("\"Se\":1.5", hello)
             @test occursin("\"Si\":4.5", hello)
             @test occursin("\"dt\":0.1", hello)
+            @test occursin("\"activityScale\":\"simulation\"", hello)
             @test occursin("\"cols\":50", frame)
             @test occursin("\"retinalRows\":25", frame)
             @test occursin("\"retinalCols\":25", frame)
