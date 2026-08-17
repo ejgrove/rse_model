@@ -1219,6 +1219,12 @@ const APPLET_HTML = raw"""
       letter-spacing: 0.04em;
     }
 
+    label sub {
+      font-size: 0.72em;
+      line-height: 0;
+      vertical-align: sub;
+    }
+
     input, select, button {
       width: 100%;
       border: 1px solid var(--line-strong);
@@ -1275,7 +1281,7 @@ const APPLET_HTML = raw"""
     }
 
     .status {
-      margin-top: 18px;
+      margin-top: 0;
       padding: 12px;
       border-radius: 18px;
       background: #f7fbfc;
@@ -1385,7 +1391,7 @@ const APPLET_HTML = raw"""
 
     .canvas-frame {
       position: relative;
-      padding: 34px 34px 34px;
+      padding: 36px 38px 36px;
       border-radius: 14px;
       background:
         radial-gradient(circle at 50% 18%, rgba(0, 158, 170, 0.07), transparent 16rem),
@@ -1411,13 +1417,12 @@ const APPLET_HTML = raw"""
     }
 
     .axis-label {
-      color: #607284;
+      color: #486174;
       font-variant-numeric: tabular-nums;
-      background: rgba(255, 255, 255, 0.92);
-      border: 1px solid rgba(198, 216, 226, 0.82);
-      border-radius: 999px;
-      padding: 3px 6px;
-      box-shadow: 0 6px 18px rgba(25, 56, 82, 0.07);
+      background: transparent;
+      border: 0;
+      padding: 0;
+      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.85);
     }
 
     .hemi-label {
@@ -1431,12 +1436,12 @@ const APPLET_HTML = raw"""
     .cortical-frame {
       --left-center: 50%;
       --right-center: 50%;
-      --left-label-y: 12px;
-      --right-label-y: 12px;
-      --left-top-y: 44px;
-      --right-top-y: 44px;
-      --left-bottom-y: calc(100% - 13px);
-      --right-bottom-y: calc(100% - 13px);
+      --left-label-y: 8px;
+      --right-label-y: 8px;
+      --left-top-y: 22px;
+      --right-top-y: 22px;
+      --left-bottom-y: calc(100% - 24px);
+      --right-bottom-y: calc(100% - 24px);
     }
 
     .hemi-left,
@@ -1478,9 +1483,10 @@ const APPLET_HTML = raw"""
     }
 
     .cortical-frame.stacked {
-      padding: 22px 28px;
+      padding: 46px 30px 34px;
     }
 
+    .cortical-frame:not(.coupled) .hemi-left,
     .cortical-frame:not(.coupled) .hemi-right,
     .cortical-frame:not(.coupled) .axis-top-right,
     .cortical-frame:not(.coupled) .axis-bottom-right {
@@ -1488,25 +1494,25 @@ const APPLET_HTML = raw"""
     }
 
     .retinal-angle-90 {
-      top: 14px;
+      top: 15px;
       left: 50%;
       transform: translateX(-50%);
     }
 
     .retinal-angle-270 {
-      bottom: 14px;
+      bottom: 15px;
       left: 50%;
       transform: translateX(-50%);
     }
 
     .retinal-angle-0 {
-      right: 4px;
+      right: 12px;
       top: 50%;
       transform: translateY(-50%);
     }
 
     .retinal-angle-180 {
-      left: 4px;
+      left: 12px;
       top: 50%;
       transform: translateY(-50%);
     }
@@ -1655,8 +1661,8 @@ const APPLET_HTML = raw"""
           <label class="wide">Field geometry<select id="fieldGeometry"><option value="square">square</option><option value="double_sech">double-sech V1</option></select></label>
           <label id="fieldDensityControl" class="hidden-control">Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
           <label id="nControl">N<input id="n" type="number" min="5" step="2" value="81"></label>
-          <label>&sigma;<sub>e</sub><input id="se" type="number" min="0.1" step="0.05" value="2"></label>
-          <label>&sigma;<sub>i</sub><input id="si" type="number" min="0.1" step="0.05" value="5"></label>
+          <label><span>&sigma;<sub>e</sub></span><input id="se" type="number" min="0.1" step="0.05" value="2"></label>
+          <label><span>&sigma;<sub>i</sub></span><input id="si" type="number" min="0.1" step="0.05" value="5"></label>
           <label>dt (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
         </div>
       </div>
@@ -1670,7 +1676,6 @@ const APPLET_HTML = raw"""
         <button id="pausePlay" class="pause">Pause</button>
         <button id="reset" class="secondary">Reset</button>
       </div>
-      <div id="status" class="status">Streaming starts automatically. Use Pause or Reset while tuning parameters.</div>
     </section>
 
     <section class="stage">
@@ -1714,6 +1719,7 @@ const APPLET_HTML = raw"""
         <div id="legend" class="legend"></div>
         <span id="legendHigh" class="legend-high">high</span>
       </div>
+      <div id="status" class="status">Streaming starts automatically. Use Pause or Reset while tuning parameters.</div>
     </section>
   </main>
 
@@ -1874,10 +1880,10 @@ const APPLET_HTML = raw"""
       } else {
         els.corticalFrame.style.setProperty("--left-label-y", "12px");
         els.corticalFrame.style.setProperty("--right-label-y", "12px");
-        els.corticalFrame.style.setProperty("--left-top-y", "44px");
-        els.corticalFrame.style.setProperty("--right-top-y", "44px");
-        els.corticalFrame.style.setProperty("--left-bottom-y", "calc(100% - 13px)");
-        els.corticalFrame.style.setProperty("--right-bottom-y", "calc(100% - 13px)");
+        els.corticalFrame.style.setProperty("--left-top-y", "22px");
+        els.corticalFrame.style.setProperty("--right-top-y", "22px");
+        els.corticalFrame.style.setProperty("--left-bottom-y", "calc(100% - 24px)");
+        els.corticalFrame.style.setProperty("--right-bottom-y", "calc(100% - 24px)");
       }
       els.hemiLeft.textContent = isCoupled ? "Left hemisphere" : "Cortical sheet";
       els.hemiRight.textContent = "Right hemisphere";
@@ -1892,20 +1898,17 @@ const APPLET_HTML = raw"""
       }
 
       const hemiCols = Math.floor(cols / 2);
-      const gapRows = Math.max(10, Math.round(rows * 0.16));
+      const gapRows = Math.max(24, Math.round(rows * 0.32));
       const drawRows = 2 * rows + gapRows;
       const drawCols = hemiCols;
       setCanvasSize(canvas, drawRows, drawCols);
-      const yPct = (fraction) => `${(6 + 88 * fraction).toFixed(2)}%`;
-      const topEnd = rows / drawRows;
-      const bottomStart = (rows + gapRows) / drawRows;
       updateCorticalLabels(true, 50, 50, {
-        "--left-label-y": yPct(0.055),
-        "--left-top-y": yPct(0.16),
-        "--left-bottom-y": yPct(Math.max(0.18, topEnd - 0.045)),
-        "--right-label-y": yPct(bottomStart + 0.055),
-        "--right-top-y": yPct(bottomStart + 0.16),
-        "--right-bottom-y": yPct(0.955)
+        "--left-label-y": "9px",
+        "--left-top-y": "27px",
+        "--left-bottom-y": "calc(50% - 20px)",
+        "--right-label-y": "calc(50% - 8px)",
+        "--right-top-y": "calc(50% + 18px)",
+        "--right-bottom-y": "calc(100% - 23px)"
       });
 
       const ctx = canvas.getContext("2d");
@@ -2065,9 +2068,9 @@ const APPLET_HTML = raw"""
       ctx.fillText(`+${maxRadius}`, padL + plotW, height - 10 * dpr);
       ctx.textAlign = "left";
       ctx.fillStyle = "#009eaa";
-      ctx.fillText(`sigma_e, r=${radiusE}`, padL + 8 * dpr, padT + 14 * dpr);
+      ctx.fillText(`\u03c3\u2091, r=${radiusE}`, padL + 8 * dpr, padT + 14 * dpr);
       ctx.fillStyle = "#f3b33d";
-      ctx.fillText(`sigma_i, r=${radiusI}`, padL + 110 * dpr, padT + 14 * dpr);
+      ctx.fillText(`\u03c3\u1d62, r=${radiusI}`, padL + 110 * dpr, padT + 14 * dpr);
       els.kernelInfo.textContent =
         `r_e=ceil(${cutoff} x ${se})=${radiusE}; r_i=ceil(${cutoff} x ${si})=${radiusI}; mass ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%`;
     }
@@ -2330,7 +2333,7 @@ const APPLET_HTML = raw"""
           const geometryText = msg.fieldGeometry === "double_sech" ? `, double-sech V1 density ${msg.fieldDensity}` : "";
           const boundaryText = msg.boundaryX === msg.boundaryY ? `boundary:${msg.boundaryX}` : `x:${msg.boundaryX} y:${msg.boundaryY}`;
           const reflectText = (msg.boundaryX === "partial_reflect" || msg.boundaryY === "partial_reflect") ? ` reflect=${msg.partialReflectStrength}` : "";
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, sigma_e=${msg.Se}, sigma_i=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, \u03c3\u2091=${msg.Se}, \u03c3\u1d62=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {
