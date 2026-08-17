@@ -1532,7 +1532,7 @@ const APPLET_HTML = raw"""
 
     .canvas-frame {
       position: relative;
-      padding: 36px 38px 36px;
+      padding: 30px 36px;
       border-radius: 14px;
       background:
         radial-gradient(circle at 50% 18%, rgba(0, 158, 170, 0.07), transparent 16rem),
@@ -1550,7 +1550,7 @@ const APPLET_HTML = raw"""
       position: absolute;
       z-index: 2;
       color: #33495c;
-      font-size: 9px;
+      font-size: 8px;
       font-weight: 800;
       letter-spacing: 0.04em;
       line-height: 1;
@@ -1569,45 +1569,37 @@ const APPLET_HTML = raw"""
 
     .hemi-label {
       color: #0b3146;
-      background: rgba(231, 246, 248, 0.92);
-      border: 1px solid rgba(0, 158, 170, 0.18);
-      border-radius: 999px;
-      padding: 4px 7px;
+      font-size: 9px;
+      letter-spacing: 0.07em;
     }
 
     .ecc-label {
       color: #607284;
-      background: rgba(255, 255, 255, 0.78);
-      border: 1px solid rgba(198, 216, 226, 0.52);
-      border-radius: 999px;
-      padding: 3px 6px;
+      font-size: 8px;
       text-transform: none;
-      letter-spacing: 0.02em;
+      letter-spacing: 0.01em;
     }
 
     .cortical-frame {
       --left-center: 50%;
       --right-center: 50%;
-      --left-label-y: 8px;
-      --right-label-y: 8px;
-      --left-top-y: 22px;
-      --right-top-y: 22px;
-      --left-bottom-y: calc(100% - 24px);
-      --right-bottom-y: calc(100% - 24px);
+      --left-label-y: 10px;
+      --right-label-y: 10px;
+      --left-top-y: 30px;
+      --right-top-y: 30px;
+      --left-bottom-y: calc(100% - 30px);
+      --right-bottom-y: calc(100% - 30px);
       --left-ecc-y: 50%;
       --right-ecc-y: 50%;
+      padding: 30px 56px 28px;
     }
 
-    .hemi-left,
-    .axis-top-left,
-    .axis-bottom-left {
+    .hemi-left {
       left: var(--left-center);
       transform: translateX(-50%);
     }
 
-    .hemi-right,
-    .axis-top-right,
-    .axis-bottom-right {
+    .hemi-right {
       left: var(--right-center);
       transform: translateX(-50%);
     }
@@ -1636,6 +1628,28 @@ const APPLET_HTML = raw"""
       top: var(--right-bottom-y);
     }
 
+    .axis-top-left,
+    .axis-bottom-left,
+    .axis-top-right,
+    .axis-bottom-right {
+      left: 18px;
+      width: 24px;
+      text-align: right;
+      transform: translateY(-50%);
+    }
+
+    .axis-top-left::after,
+    .axis-bottom-left::after,
+    .axis-top-right::after,
+    .axis-bottom-right::after {
+      content: "";
+      position: absolute;
+      left: calc(100% + 5px);
+      top: 50%;
+      width: 9px;
+      border-top: 1px solid rgba(72, 97, 116, 0.55);
+    }
+
     .cortical-ecc {
       top: var(--left-ecc-y);
       transform: translateY(-50%);
@@ -1643,7 +1657,7 @@ const APPLET_HTML = raw"""
 
     .cortical-fovea-left,
     .cortical-fovea-right {
-      left: 7px;
+      left: 8px;
     }
 
     .cortical-periphery-left,
@@ -1662,7 +1676,7 @@ const APPLET_HTML = raw"""
     }
 
     .cortical-frame.stacked {
-      padding: 46px 30px 34px;
+      padding: 40px 56px 30px;
     }
 
     .cortical-frame:not(.coupled) .hemi-left,
@@ -1673,25 +1687,25 @@ const APPLET_HTML = raw"""
     }
 
     .retinal-angle-90 {
-      top: 15px;
+      top: 12px;
       left: 50%;
       transform: translateX(-50%);
     }
 
     .retinal-angle-270 {
-      bottom: 15px;
+      bottom: 12px;
       left: 50%;
       transform: translateX(-50%);
     }
 
     .retinal-angle-0 {
-      right: 12px;
+      right: 10px;
       top: 50%;
       transform: translateY(-50%);
     }
 
     .retinal-angle-180 {
-      left: 12px;
+      left: 10px;
       top: 50%;
       transform: translateY(-50%);
     }
@@ -1902,10 +1916,10 @@ const APPLET_HTML = raw"""
             <canvas id="cortical"></canvas>
             <span id="hemiLeft" class="hemi-label hemi-left">Cortical sheet</span>
             <span id="hemiRight" class="hemi-label hemi-right">Right hemisphere</span>
-            <span class="axis-label axis-top-left">90&deg;</span>
-            <span class="axis-label axis-bottom-left">270&deg;</span>
-            <span class="axis-label axis-top-right">90&deg;</span>
-            <span class="axis-label axis-bottom-right">270&deg;</span>
+            <span class="axis-label axis-top-left">0&deg;</span>
+            <span class="axis-label axis-bottom-left">0&deg;</span>
+            <span class="axis-label axis-top-right">0&deg;</span>
+            <span class="axis-label axis-bottom-right">0&deg;</span>
             <span class="ecc-label cortical-ecc cortical-fovea-left">fovea</span>
             <span class="ecc-label cortical-ecc cortical-periphery-left">periphery</span>
             <span class="ecc-label cortical-ecc cortical-fovea-right">fovea</span>
@@ -2201,17 +2215,23 @@ const APPLET_HTML = raw"""
           els.corticalFrame.style.setProperty(key, value);
         });
       } else {
-        els.corticalFrame.style.setProperty("--left-label-y", "12px");
-        els.corticalFrame.style.setProperty("--right-label-y", "12px");
-        els.corticalFrame.style.setProperty("--left-top-y", "22px");
-        els.corticalFrame.style.setProperty("--right-top-y", "22px");
-        els.corticalFrame.style.setProperty("--left-bottom-y", "calc(100% - 24px)");
-        els.corticalFrame.style.setProperty("--right-bottom-y", "calc(100% - 24px)");
+        els.corticalFrame.style.setProperty("--left-label-y", "10px");
+        els.corticalFrame.style.setProperty("--right-label-y", "10px");
+        els.corticalFrame.style.setProperty("--left-top-y", "30px");
+        els.corticalFrame.style.setProperty("--right-top-y", "30px");
+        els.corticalFrame.style.setProperty("--left-bottom-y", "calc(100% - 30px)");
+        els.corticalFrame.style.setProperty("--right-bottom-y", "calc(100% - 30px)");
         els.corticalFrame.style.setProperty("--left-ecc-y", "50%");
         els.corticalFrame.style.setProperty("--right-ecc-y", "50%");
       }
       els.hemiLeft.textContent = isCoupled ? "Left hemisphere" : "Cortical sheet";
       els.hemiRight.textContent = "Right hemisphere";
+      document.querySelectorAll(".axis-top-left, .axis-top-right").forEach((label) => {
+        label.textContent = isCoupled ? "90\u00b0" : "0\u00b0";
+      });
+      document.querySelectorAll(".axis-bottom-left, .axis-bottom-right").forEach((label) => {
+        label.textContent = isCoupled ? "270\u00b0" : "0\u00b0";
+      });
     }
 
     function drawCortical(canvas, values, rows, cols) {
@@ -2228,13 +2248,13 @@ const APPLET_HTML = raw"""
       const drawCols = hemiCols;
       setCanvasSize(canvas, drawRows, drawCols);
       updateCorticalLabels(true, 50, 50, {
-        "--left-label-y": "9px",
-        "--left-top-y": "27px",
+        "--left-label-y": "12px",
+        "--left-top-y": "40px",
         "--left-bottom-y": "calc(50% - 20px)",
         "--left-ecc-y": "calc(25% + 11px)",
-        "--right-label-y": "calc(50% - 8px)",
-        "--right-top-y": "calc(50% + 18px)",
-        "--right-bottom-y": "calc(100% - 23px)",
+        "--right-label-y": "calc(100% - 13px)",
+        "--right-top-y": "calc(50% + 20px)",
+        "--right-bottom-y": "calc(100% - 30px)",
         "--right-ecc-y": "calc(75% + 8px)"
       });
 
