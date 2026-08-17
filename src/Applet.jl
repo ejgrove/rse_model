@@ -551,14 +551,26 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
             apply_field_mask!(Ue_left, Ui_left, geometry)
             apply_field_mask!(Ue_right, Ui_right, geometry)
             if _uses_overlap_coupling(config)
-                _apply_midline_coupling!(
-                    Ue_left,
-                    Ui_left,
-                    Ue_right,
-                    Ui_right,
-                    config.coupling_strength,
-                    config.overlap_rows,
-                )
+                if has_field_mask(geometry)
+                    _apply_masked_midline_coupling!(
+                        Ue_left,
+                        Ui_left,
+                        Ue_right,
+                        Ui_right,
+                        geometry.mask,
+                        config.coupling_strength,
+                        config.overlap_rows,
+                    )
+                else
+                    _apply_midline_coupling!(
+                        Ue_left,
+                        Ui_left,
+                        Ue_right,
+                        Ui_right,
+                        config.coupling_strength,
+                        config.overlap_rows,
+                    )
+                end
                 apply_field_mask!(Ue_left, Ui_left, geometry)
                 apply_field_mask!(Ue_right, Ui_right, geometry)
             end
@@ -836,15 +848,28 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
             end
 
             if _uses_overlap_coupling(config)
-                apply_midline_coupling!(
-                    Ue_left,
-                    Ui_left,
-                    Ue_right,
-                    Ui_right;
-                    strength=config.coupling_strength,
-                    overlap_rows=config.overlap_rows,
-                    gpu_threads=config.gpu_threads,
-                )
+                if mask_gpu !== nothing
+                    apply_masked_midline_coupling!(
+                        Ue_left,
+                        Ui_left,
+                        Ue_right,
+                        Ui_right,
+                        mask_gpu;
+                        strength=config.coupling_strength,
+                        overlap_rows=config.overlap_rows,
+                        gpu_threads=config.gpu_threads,
+                    )
+                else
+                    apply_midline_coupling!(
+                        Ue_left,
+                        Ui_left,
+                        Ue_right,
+                        Ui_right;
+                        strength=config.coupling_strength,
+                        overlap_rows=config.overlap_rows,
+                        gpu_threads=config.gpu_threads,
+                    )
+                end
                 if mask_gpu !== nothing
                     apply_field_mask!(Ue_left, Ui_left, mask_gpu, config.gpu_threads)
                     apply_field_mask!(Ue_right, Ui_right, mask_gpu, config.gpu_threads)

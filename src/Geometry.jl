@@ -180,6 +180,47 @@ function _sample_bilinear_zero(img::AbstractMatrix, mask::AbstractMatrix{Bool}, 
            dy * ((1 - dx) * v10 + dx * v11)
 end
 
+function _sample_bilinear_masked(img::AbstractMatrix, mask::AbstractMatrix{Bool}, y::Float64, x::Float64)
+    rows, cols = size(img)
+    if x < 1 || y < 1 || x > cols || y > rows
+        return zero(eltype(img))
+    end
+    x0 = floor(Int, x)
+    y0 = floor(Int, y)
+    x1 = min(x0 + 1, cols)
+    y1 = min(y0 + 1, rows)
+    x0 = max(x0, 1)
+    y0 = max(y0, 1)
+    dx = x - x0
+    dy = y - y0
+
+    w00 = (1 - dy) * (1 - dx)
+    w01 = (1 - dy) * dx
+    w10 = dy * (1 - dx)
+    w11 = dy * dx
+    value = zero(promote_type(eltype(img), Float64))
+    weight = 0.0
+
+    if mask[y0, x0]
+        value += w00 * img[y0, x0]
+        weight += w00
+    end
+    if mask[y0, x1]
+        value += w01 * img[y0, x1]
+        weight += w01
+    end
+    if mask[y1, x0]
+        value += w10 * img[y1, x0]
+        weight += w10
+    end
+    if mask[y1, x1]
+        value += w11 * img[y1, x1]
+        weight += w11
+    end
+
+    return weight > 0 ? value / weight : zero(eltype(img))
+end
+
 function _double_sech_grid_position(geometry::FieldGeometry, eccentricity::Real, polar::Real)
     w = dipole_double_sech_map(eccentricity, polar)
     x = 1 + (real(w) - geometry.x_min) / (geometry.x_max - geometry.x_min) * (geometry.cols - 1)
@@ -187,16 +228,24 @@ function _double_sech_grid_position(geometry::FieldGeometry, eccentricity::Real,
     return y, x
 end
 
+function _double_sech_sample(activity::AbstractMatrix, geometry::FieldGeometry, eccentricity::Real, polar::Real)
+    y_source, x_source = _double_sech_grid_position(geometry, eccentricity, polar)
+    return _sample_bilinear_masked(activity, geometry.mask, y_source, x_source)
+end
+
 function double_sech_retinal_transform(
     left_activity::AbstractMatrix,
     right_activity::AbstractMatrix,
     geometry::FieldGeometry;
     output_size=(geometry.rows, geometry.rows),
+    seam_blend_pixels::Real=1,
 )
     geometry.kind == :double_sech || throw(ArgumentError("double_sech_retinal_transform requires double-sech geometry."))
     height, width = output_size
     T = promote_type(eltype(left_activity), eltype(right_activity))
     output = Matrix{T}(undef, height, width)
+    visual_pixel_width = 2 / max(width - 1, 1)
+    seam_blend_width = max(0.0, Float64(seam_blend_pixels)) * visual_pixel_width
 
     @inbounds for col in 1:width, row in 1:height
         x_visual = -1 + 2 * (col - 1) / max(width - 1, 1)
@@ -209,9 +258,15 @@ function double_sech_retinal_transform(
 
         eccentricity = DOUBLE_SECH_E_MAX * r
         polar = r < 1e-9 ? 0.0 : atan(y_visual, abs(x_visual))
-        y_source, x_source = _double_sech_grid_position(geometry, eccentricity, polar)
-        source = x_visual >= 0 ? left_activity : right_activity
-        output[row, col] = T(_sample_bilinear_zero(source, geometry.mask, y_source, x_source))
+        if seam_blend_width > 0 && abs(x_visual) <= seam_blend_width
+            left_value = _double_sech_sample(left_activity, geometry, eccentricity, polar)
+            right_value = _double_sech_sample(right_activity, geometry, eccentricity, polar)
+            left_weight = clamp(0.5 + 0.5 * x_visual / seam_blend_width, 0.0, 1.0)
+            output[row, col] = T((1 - left_weight) * right_value + left_weight * left_value)
+        else
+            source = x_visual > 0 ? left_activity : right_activity
+            output[row, col] = T(_double_sech_sample(source, geometry, eccentricity, polar))
+        end
     end
 
     return output

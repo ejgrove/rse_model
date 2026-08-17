@@ -202,12 +202,39 @@ function _apply_midline_coupling!(Ue_left, Ui_left, Ue_right, Ui_right, strength
     return Ue_left, Ui_left, Ue_right, Ui_right
 end
 
+function _apply_masked_midline_coupling!(Ue_left, Ui_left, Ue_right, Ui_right, mask, strength, overlap_rows)
+    strength <= 0 && return Ue_left, Ui_left, Ue_right, Ui_right
+    rows, cols = size(Ue_left)
+    band_rows = max(1, div(overlap_rows, 2))
+    band_rows = min(band_rows, div(rows, 2))
+    mix = eltype(Ue_left)(strength)
+
+    @inbounds for col in 1:cols, row_offset in 0:(band_rows - 1)
+        left_top = row_offset + 1
+        right_top = band_rows - row_offset
+        _mix_pair_if_valid!(Ue_left, Ue_right, mask, left_top, right_top, col, mix)
+        _mix_pair_if_valid!(Ui_left, Ui_right, mask, left_top, right_top, col, mix)
+
+        left_bottom = rows - band_rows + row_offset + 1
+        right_bottom = rows - row_offset
+        _mix_pair_if_valid!(Ue_left, Ue_right, mask, left_bottom, right_bottom, col, mix)
+        _mix_pair_if_valid!(Ui_left, Ui_right, mask, left_bottom, right_bottom, col, mix)
+    end
+
+    return Ue_left, Ui_left, Ue_right, Ui_right
+end
+
 function _mix_pair!(left, right, left_row, right_row, col, mix)
     left_value = left[left_row, col]
     right_value = right[right_row, col]
     left[left_row, col] = left_value + mix * (right_value - left_value)
     right[right_row, col] = right_value + mix * (left_value - right_value)
     return
+end
+
+function _mix_pair_if_valid!(left, right, mask, left_row, right_row, col, mix)
+    mask[left_row, col] && mask[right_row, col] || return
+    return _mix_pair!(left, right, left_row, right_row, col, mix)
 end
 
 struct MetalFFTConvolver{P,Q,K,W}
@@ -770,6 +797,51 @@ function _metal_midline_coupling_kernel!(
     return
 end
 
+function _metal_masked_midline_coupling_kernel!(
+    Ue_left,
+    Ui_left,
+    Ue_right,
+    Ui_right,
+    mask,
+    strength,
+    rows,
+    cols,
+    band_rows,
+    n,
+)
+    i = thread_position_in_grid().x
+    if i <= n
+        band_area = band_rows * cols
+        band = (i - UInt32(1)) ÷ band_area
+        local_i = (i - UInt32(1)) % band_area
+        row_offset = local_i % band_rows
+        col0 = local_i ÷ band_rows
+
+        left_row0 = row_offset
+        right_row0 = band_rows - row_offset - UInt32(1)
+        if band == UInt32(1)
+            left_row0 = rows - band_rows + row_offset
+            right_row0 = rows - row_offset - UInt32(1)
+        end
+
+        left_idx = left_row0 + col0 * rows + UInt32(1)
+        right_idx = right_row0 + col0 * rows + UInt32(1)
+
+        if mask[left_idx] > 0.5f0 && mask[right_idx] > 0.5f0
+            left_e = Ue_left[left_idx]
+            right_e = Ue_right[right_idx]
+            left_i = Ui_left[left_idx]
+            right_i = Ui_right[right_idx]
+
+            Ue_left[left_idx] = left_e + strength * (right_e - left_e)
+            Ue_right[right_idx] = right_e + strength * (left_e - right_e)
+            Ui_left[left_idx] = left_i + strength * (right_i - left_i)
+            Ui_right[right_idx] = right_i + strength * (left_i - right_i)
+        end
+    end
+    return
+end
+
 function apply_midline_coupling!(
     Ue_left,
     Ui_left,
@@ -791,6 +863,39 @@ function apply_midline_coupling!(
         Ui_left,
         Ue_right,
         Ui_right,
+        Float32(strength),
+        UInt32(rows_u),
+        UInt32(cols_u),
+        UInt32(band_rows_u),
+        UInt32(n_pairs),
+    )
+
+    return Ue_left, Ui_left, Ue_right, Ui_right
+end
+
+function apply_masked_midline_coupling!(
+    Ue_left,
+    Ui_left,
+    Ue_right,
+    Ui_right,
+    mask;
+    strength::Real,
+    overlap_rows::Integer,
+    gpu_threads::Integer=256,
+)
+    strength <= 0 && return Ue_left, Ui_left, Ue_right, Ui_right
+    rows_u, cols_u = size(Ue_left)
+    band_rows_u = min(max(1, div(overlap_rows, 2)), div(rows_u, 2))
+    n_pairs = 2 * band_rows_u * cols_u
+    threads = min(gpu_threads, n_pairs)
+    groups = cld(n_pairs, threads)
+
+    @metal threads=threads groups=groups _metal_masked_midline_coupling_kernel!(
+        Ue_left,
+        Ui_left,
+        Ue_right,
+        Ui_right,
+        mask,
         Float32(strength),
         UInt32(rows_u),
         UInt32(cols_u),

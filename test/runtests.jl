@@ -54,6 +54,16 @@ end
     @test size(ret) == (31, 31)
     @test all(isfinite, ret)
 
+    left_const = fill(10.0f0, size(v1.mask))
+    right_const = fill(20.0f0, size(v1.mask))
+    split_ret = double_sech_retinal_transform(left_const, right_const, v1; output_size=(31, 31), seam_blend_pixels=0)
+    @test split_ret[16, 28] ≈ 10.0f0
+    @test split_ret[16, 4] ≈ 20.0f0
+    blended_ret = double_sech_retinal_transform(left_const, right_const, v1; output_size=(31, 31))
+    @test blended_ret[16, 16] ≈ 15.0f0
+    @test blended_ret[16, 28] ≈ 10.0f0
+    @test blended_ret[16, 4] ≈ 20.0f0
+
     U = ones(Float32, size(v1.mask))
     apply_field_mask!(U, v1)
     @test all(U[.!v1.mask] .== 0)
@@ -87,6 +97,26 @@ end
     @test right_i[7, 1] == 3.5f0
     @test left_e[4, 1] == 1.0f0
     @test right_i[4, 1] == 4.0f0
+
+    masked_left_e = fill(1.0f0, 8, 4)
+    masked_left_i = fill(2.0f0, 8, 4)
+    masked_right_e = fill(3.0f0, 8, 4)
+    masked_right_i = fill(4.0f0, 8, 4)
+    mask = trues(8, 4)
+    mask[1, 1] = false
+    RSEModel._apply_masked_midline_coupling!(
+        masked_left_e,
+        masked_left_i,
+        masked_right_e,
+        masked_right_i,
+        mask,
+        0.25f0,
+        4,
+    )
+    @test masked_left_e[1, 1] == 1.0f0
+    @test masked_right_e[2, 1] == 3.0f0
+    @test masked_left_e[1, 2] == 1.5f0
+    @test masked_right_i[2, 2] == 3.5f0
 end
 
 @testset "coupled live view orientation" begin
