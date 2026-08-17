@@ -1265,6 +1265,54 @@ const APPLET_HTML = raw"""
       gap: 10px;
     }
 
+    .preset-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .preset-button {
+      min-height: 64px;
+      padding: 9px 10px;
+      color: #0b3146;
+      background:
+        radial-gradient(circle at 95% 5%, rgba(0, 158, 170, 0.13), transparent 4rem),
+        #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      text-align: left;
+      box-shadow: none;
+    }
+
+    .preset-button strong {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .preset-button span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.25;
+    }
+
+    .param-output {
+      margin: 10px 0 0;
+      max-height: 190px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid rgba(13, 38, 56, 0.18);
+      border-radius: 14px;
+      background: #071824;
+      color: #dff8f8;
+      padding: 10px;
+      font: 10.5px/1.45 "IBM Plex Mono", "SFMono-Regular", monospace;
+    }
+
     .wide {
       grid-column: 1 / -1;
     }
@@ -1340,6 +1388,10 @@ const APPLET_HTML = raw"""
     button.paused {
       background: linear-gradient(135deg, var(--accent-2), #ffcf70);
       color: #2d2108;
+    }
+
+    .section-actions {
+      margin-top: 10px;
     }
 
     .status {
@@ -1579,12 +1631,33 @@ const APPLET_HTML = raw"""
       transform: translateY(-50%);
     }
 
-    .kernel-card {
-      margin-top: 16px;
+    .frame-card {
       padding: 13px;
       border: 1px solid var(--line);
       border-radius: 20px;
       background: #ffffff;
+      box-shadow: var(--soft-shadow);
+    }
+
+    .frame-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 9px;
+    }
+
+    .frame-toolbar .view-title {
+      flex: 1;
+    }
+
+    .frame-toolbar select {
+      width: min(220px, 52%);
+      padding: 8px 10px;
+    }
+
+    .frame-panel.hidden-control {
+      display: none !important;
     }
 
     .kernel-canvas {
@@ -1593,21 +1666,14 @@ const APPLET_HTML = raw"""
       image-rendering: auto;
     }
 
-    .stimulus-card {
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(247, 251, 252, 0.94));
-      padding: 10px;
-      box-shadow: var(--soft-shadow);
-    }
-
-    .stimulus-card .view-head {
-      margin-bottom: 6px;
-    }
-
     .stimulus-canvas {
       height: 82px;
+      background: #f8fbfd;
+      image-rendering: auto;
+    }
+
+    .field-canvas {
+      aspect-ratio: 2.2 / 1;
       background: #f8fbfd;
       image-rendering: auto;
     }
@@ -1679,7 +1745,8 @@ const APPLET_HTML = raw"""
         <div class="section-title">Visualization</div>
         <div class="control-grid">
           <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
-          <label>Speed<select id="speed"><option value="1">1x real time</option><option value="0.5">0.5x</option><option value="2">2x</option><option value="0">max</option></select></label>
+          <label>Speed x<input id="speed" type="number" min="0.1" max="10" step="0.1" value="1"></label>
+          <label id="maxSpeedControl" class="check-row"><input id="maxSpeed" type="checkbox"> Max speed</label>
           <label class="wide">Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
           <label class="wide">Activity scale<select id="activityScale"><option value="frame">frame min/max</option><option value="simulation">simulation min/max</option></select></label>
         </div>
@@ -1697,13 +1764,19 @@ const APPLET_HTML = raw"""
       </div>
 
       <div class="control-section">
-        <div class="section-title">Boundary / Coupling</div>
+        <div class="section-title">Boundary</div>
         <div class="control-grid">
           <label id="boundaryControl" class="hidden-control">Boundary<select id="boundary"><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
           <label id="boundaryXControl">Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
           <label id="boundaryYControl">Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
-          <label>Reflect gain<input id="partialReflectStrength" type="number" min="0" max="1" step="0.05" value="0.5"></label>
-          <label>Coupling<select id="coupling"><option value="off">off</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
+          <label id="partialReflectControl" class="hidden-control">Reflect gain<input id="partialReflectStrength" type="number" min="0" max="1" step="0.05" value="0.5"></label>
+        </div>
+      </div>
+
+      <div class="control-section">
+        <div class="section-title">Coupling</div>
+        <div class="control-grid">
+          <label>Coupling<select id="coupling"><option value="off">none</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
           <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
           <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
         </div>
@@ -1730,10 +1803,19 @@ const APPLET_HTML = raw"""
         </div>
       </div>
 
-      <div class="kernel-card">
-        <div class="view-head"><div class="view-title">Kernel window</div><div class="view-note" id="kernelInfo">-</div></div>
-        <canvas id="kernelGraph" class="kernel-canvas"></canvas>
-        <div class="tiny-note">Cutoff is measured in sigma units: r<sub>e</sub> = ceil(cutoff x &sigma;<sub>e</sub>) and r<sub>i</sub> = ceil(cutoff x &sigma;<sub>i</sub>). The applet uses the separable product of the 1D kernels in x and y.</div>
+      <div class="control-section">
+        <div class="section-title">Selected Parameters</div>
+        <div class="preset-grid">
+          <button class="preset-button" data-preset="default"><strong>Default</strong><span>Boundary periodic, coupling none, kernel 3, dt 0.2</span></button>
+          <button class="preset-button" data-preset="p1"><strong>1</strong><span>Zig-zag square grid<br>N64 A0.2 T55</span></button>
+          <button class="preset-button" data-preset="p2"><strong>2</strong><span>Square grid<br>N81 A0.7 T120</span></button>
+          <button class="preset-button" data-preset="p3"><strong>3</strong><span>Lines and dots<br>N81 A0.5 T125</span></button>
+          <button class="preset-button" data-preset="p4"><strong>4</strong><span>Hex grid rings<br>N81 A0.5 T115</span></button>
+        </div>
+        <div class="section-actions">
+          <button id="printParams" class="secondary">Print parameters</button>
+        </div>
+        <pre id="paramOutput" class="param-output">Click Print parameters to write the current settings here.</pre>
       </div>
       <div class="button-row">
         <button id="pausePlay" class="pause">Pause</button>
@@ -1747,10 +1829,6 @@ const APPLET_HTML = raw"""
         <div class="metric"><span>Stream FPS</span><strong id="streamFps">0</strong></div>
         <div class="metric"><span>ms / step</span><strong id="msStep">0</strong></div>
         <div class="metric"><span>Real-time x</span><strong id="rtx">0</strong></div>
-      </div>
-      <div class="stimulus-card">
-        <div class="view-head"><div class="view-title">Stimulus</div><div class="view-note" id="stimulusInfo">moving 0.5 s window</div></div>
-        <canvas id="stimulusGraph" class="stimulus-canvas"></canvas>
       </div>
       <div class="views">
         <div class="view">
@@ -1774,6 +1852,29 @@ const APPLET_HTML = raw"""
             <span class="axis-label retinal-angle-180">180&deg;</span>
             <span class="axis-label retinal-angle-270">270&deg;</span>
           </div>
+        </div>
+      </div>
+      <div class="frame-card">
+        <div class="frame-toolbar">
+          <div class="view-title">Frames</div>
+          <select id="frameSelect">
+            <option value="stimulus">Stimulus</option>
+            <option value="kernel">Kernel</option>
+            <option value="field">Neural field</option>
+          </select>
+        </div>
+        <div id="stimulusPanel" class="frame-panel" data-frame="stimulus">
+          <div class="view-head"><div class="view-title">Stimulus</div><div class="view-note" id="stimulusInfo">moving 0.5 s window</div></div>
+          <canvas id="stimulusGraph" class="stimulus-canvas"></canvas>
+        </div>
+        <div id="kernelPanel" class="frame-panel hidden-control" data-frame="kernel">
+          <div class="view-head"><div class="view-title">Kernel window</div><div class="view-note" id="kernelInfo">-</div></div>
+          <canvas id="kernelGraph" class="kernel-canvas"></canvas>
+          <div class="tiny-note">Cutoff is measured in sigma units: r<sub>e</sub> = ceil(cutoff x &sigma;<sub>e</sub>) and r<sub>i</sub> = ceil(cutoff x &sigma;<sub>i</sub>). The applet uses the separable product of the 1D kernels in x and y.</div>
+        </div>
+        <div id="fieldPanel" class="frame-panel hidden-control" data-frame="field">
+          <div class="view-head"><div class="view-title">Neural field</div><div class="view-note" id="fieldInfo">node lattice and retinal projection</div></div>
+          <canvas id="fieldGraph" class="field-canvas"></canvas>
         </div>
       </div>
       <div class="legend-wrap">
@@ -1809,9 +1910,12 @@ const APPLET_HTML = raw"""
       boundaryXControl: document.getElementById("boundaryXControl"),
       boundaryY: document.getElementById("boundaryY"),
       boundaryYControl: document.getElementById("boundaryYControl"),
+      partialReflectControl: document.getElementById("partialReflectControl"),
       partialReflectStrength: document.getElementById("partialReflectStrength"),
       coupling: document.getElementById("coupling"),
       speed: document.getElementById("speed"),
+      maxSpeed: document.getElementById("maxSpeed"),
+      maxSpeedControl: document.getElementById("maxSpeedControl"),
       kernelCutoff: document.getElementById("kernelCutoff"),
       amp: document.getElementById("amp"),
       period: document.getElementById("period"),
@@ -1832,6 +1936,8 @@ const APPLET_HTML = raw"""
       seed: document.getElementById("seed"),
       pausePlay: document.getElementById("pausePlay"),
       reset: document.getElementById("reset"),
+      printParams: document.getElementById("printParams"),
+      paramOutput: document.getElementById("paramOutput"),
       status: document.getElementById("status"),
       simTime: document.getElementById("simTime"),
       streamFps: document.getElementById("streamFps"),
@@ -1846,9 +1952,60 @@ const APPLET_HTML = raw"""
       retinal: document.getElementById("retinal"),
       kernelGraph: document.getElementById("kernelGraph"),
       kernelInfo: document.getElementById("kernelInfo"),
+      frameSelect: document.getElementById("frameSelect"),
+      framePanels: Array.from(document.querySelectorAll(".frame-panel")),
+      fieldGraph: document.getElementById("fieldGraph"),
+      fieldInfo: document.getElementById("fieldInfo"),
       legend: document.getElementById("legend"),
       legendLow: document.getElementById("legendLow"),
       legendHigh: document.getElementById("legendHigh")
+    };
+
+    const presets = {
+      default: {
+        label: "Default",
+        values: {
+          boundaryX: "periodic", boundaryY: "periodic", boundary: "edge",
+          coupling: "off", kernelCutoff: 3, dt: 0.2,
+          couplingStrength: 0.02, overlapRows: 6
+        }
+      },
+      p1: {
+        label: "1. Zig-zag square grid",
+        values: {
+          fieldGeometry: "square", n: 64, amp: 0.2, period: 55, duty: 50,
+          se: 2, si: 5, boundaryX: "periodic", boundaryY: "periodic",
+          coupling: "off", kernelCutoff: 3, dt: 0.2,
+          couplingStrength: 0.02, overlapRows: 6
+        }
+      },
+      p2: {
+        label: "2. Square grid",
+        values: {
+          fieldGeometry: "square", n: 81, amp: 0.7, period: 120, duty: 50,
+          se: 2, si: 5, boundaryX: "periodic", boundaryY: "periodic",
+          coupling: "off", kernelCutoff: 3, dt: 0.2,
+          couplingStrength: 0.02, overlapRows: 6
+        }
+      },
+      p3: {
+        label: "3. Lines and dots",
+        values: {
+          fieldGeometry: "square", n: 81, amp: 0.5, period: 125, duty: 50,
+          se: 2.5, si: 6.875, boundaryX: "periodic", boundaryY: "periodic",
+          coupling: "off", kernelCutoff: 3, dt: 0.2,
+          couplingStrength: 0.02, overlapRows: 6
+        }
+      },
+      p4: {
+        label: "4. Hex grid rings",
+        values: {
+          fieldGeometry: "square", n: 81, amp: 0.5, period: 115, duty: 50,
+          se: 2.5, si: 6.875, boundaryX: "periodic", boundaryY: "periodic",
+          coupling: "off", kernelCutoff: 3, dt: 0.2,
+          couplingStrength: 0.02, overlapRows: 6
+        }
+      }
     };
 
     let socket = null;
@@ -1891,6 +2048,37 @@ const APPLET_HTML = raw"""
 
     function updateLegend() {
       els.legend.style.background = `linear-gradient(90deg, ${colorStopString()})`;
+    }
+
+    function formatSimTime(ms) {
+      if (!Number.isFinite(ms)) return "0 ms";
+      if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
+      return `${ms.toFixed(1)} ms`;
+    }
+
+    function currentSpeedValue() {
+      return els.maxSpeed.checked ? 0 : Math.max(0.1, Number(els.speed.value) || 1);
+    }
+
+    function syncSpeedControls() {
+      els.speed.disabled = els.maxSpeed.checked;
+    }
+
+    function formatSpeed(value) {
+      return value === 0 ? "max" : `${Number(value).toFixed(1).replace(/\.0$/, "")}x`;
+    }
+
+    function boundaryHasReflection() {
+      if (els.fieldGeometry.value === "double_sech") {
+        return els.boundary.value === "partial_reflect";
+      }
+      return els.boundaryX.value === "partial_reflect" || els.boundaryY.value === "partial_reflect";
+    }
+
+    function syncReflectControl() {
+      const showReflect = boundaryHasReflection();
+      els.partialReflectControl.classList.toggle("hidden-control", !showReflect);
+      els.partialReflectStrength.disabled = !showReflect;
     }
 
     function setOptionAvailable(select, value, available) {
@@ -2221,7 +2409,145 @@ const APPLET_HTML = raw"""
       ctx.textAlign = "right";
       ctx.fillText("+0.25 s", padL + plotW, height - 5 * dpr);
       ctx.textAlign = "left";
-      els.stimulusInfo.textContent = `amplitude=${streamStimulus.A.toFixed(2)}, period=${streamStimulus.period.toFixed(1)} ms, duty cycle=${streamStimulus.duty.toFixed(1)}%`;
+      els.stimulusInfo.textContent = "moving 0.5 s window";
+    }
+
+    function fieldDimensions() {
+      if (lastDisplayFrame) {
+        const coupledFrame = lastDisplayFrame.cols >= lastDisplayFrame.rows * 1.5;
+        return {
+          rows: lastDisplayFrame.rows,
+          cols: coupledFrame ? Math.floor(lastDisplayFrame.cols / 2) : lastDisplayFrame.cols,
+          coupled: coupledFrame
+        };
+      }
+      let n = Math.max(5, Math.round(Number(els.n.value) || 81));
+      if (els.fieldGeometry.value === "double_sech") {
+        n = Math.max(5, Math.round(81 * (Number(els.fieldDensity.value) || 1)));
+      }
+      const coupled = els.fieldGeometry.value === "double_sech" || els.coupling.value !== "off";
+      return { rows: n, cols: n, coupled };
+    }
+
+    function drawFieldGraph() {
+      const canvas = els.fieldGraph;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(560, Math.round(rect.width * dpr));
+      const height = Math.max(250, Math.round(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, width, height);
+      const bg = ctx.createLinearGradient(0, 0, width, height);
+      bg.addColorStop(0, "#ffffff");
+      bg.addColorStop(1, "#eef7f8");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, width, height);
+
+      const { rows, cols, coupled } = fieldDimensions();
+      const overlap = Math.max(0, Math.round(Number(els.overlapRows.value) || 0));
+      const hasOverlap = els.coupling.value === "overlap" && overlap > 0;
+      const geometry = els.fieldGeometry.value;
+      const leftW = width * 0.54;
+      const rightW = width - leftW;
+      const pad = 22 * dpr;
+      const sheetW = leftW - 2 * pad;
+      const sheetGap = coupled ? 18 * dpr : 0;
+      const sheetH = coupled ? (height - 2 * pad - sheetGap) / 2 : height - 2 * pad;
+      const pointStep = Math.max(1, Math.ceil(Math.max(rows, cols) / 96));
+      const pointRadius = Math.max(0.55 * dpr, Math.min(1.6 * dpr, 58 / Math.max(rows, cols) * dpr));
+
+      function sheetX(col, x, w) {
+        return x + (cols <= 1 ? 0.5 : col / (cols - 1)) * w;
+      }
+
+      function sheetY(row, y, h) {
+        return y + (rows <= 1 ? 0.5 : row / (rows - 1)) * h;
+      }
+
+      function inDoubleSechMask(row, col) {
+        if (geometry !== "double_sech") return true;
+        const yn = rows <= 1 ? 0 : -1 + 2 * row / (rows - 1);
+        const xn = cols <= 1 ? 0 : -1 + 2 * col / (cols - 1);
+        const halfWidth = 0.35 + 0.52 * Math.sqrt(Math.max(0, 1 - 0.42 * yn * yn));
+        return Math.abs(xn) <= halfWidth;
+      }
+
+      function nodeIsOverlap(row) {
+        return hasOverlap && (row < overlap || row >= rows - overlap);
+      }
+
+      function drawSheet(x, y, w, h, label) {
+        ctx.strokeStyle = "rgba(13, 38, 56, 0.18)";
+        ctx.lineWidth = 1.1 * dpr;
+        ctx.strokeRect(x, y, w, h);
+        if (hasOverlap) {
+          const band = Math.max(1, overlap / Math.max(rows, 1)) * h;
+          ctx.fillStyle = "rgba(243, 179, 61, 0.14)";
+          ctx.fillRect(x, y, w, band);
+          ctx.fillRect(x, y + h - band, w, band);
+        }
+        ctx.fillStyle = "#0b3146";
+        ctx.font = `${11 * dpr}px IBM Plex Sans, sans-serif`;
+        ctx.textAlign = "left";
+        ctx.fillText(label, x, y - 7 * dpr);
+
+        for (let row = 0; row < rows; row += pointStep) {
+          for (let col = 0; col < cols; col += pointStep) {
+            if (!inDoubleSechMask(row, col)) continue;
+            ctx.fillStyle = nodeIsOverlap(row) ? "rgba(243, 179, 61, 0.88)" : "rgba(0, 112, 124, 0.62)";
+            ctx.beginPath();
+            ctx.arc(sheetX(col, x, w), sheetY(row, y, h), pointRadius, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+
+      if (coupled) {
+        drawSheet(pad, pad + 16 * dpr, sheetW, sheetH, "Left hemisphere");
+        drawSheet(pad, pad + 16 * dpr + sheetH + sheetGap, sheetW, sheetH, "Right hemisphere");
+      } else {
+        drawSheet(pad, pad + 16 * dpr, sheetW, sheetH, "Cortical sheet");
+      }
+
+      const cx = leftW + rightW / 2;
+      const cy = height / 2 + 8 * dpr;
+      const rMax = Math.min(rightW, height) * 0.34;
+      ctx.strokeStyle = "rgba(13, 38, 56, 0.22)";
+      ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rMax, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx - rMax, cy);
+      ctx.lineTo(cx + rMax, cy);
+      ctx.moveTo(cx, cy - rMax);
+      ctx.lineTo(cx, cy + rMax);
+      ctx.stroke();
+      ctx.fillStyle = "#0b3146";
+      ctx.font = `${11 * dpr}px IBM Plex Sans, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText("Retinal projection", cx, pad + 9 * dpr);
+
+      for (let row = 0; row < rows; row += pointStep) {
+        for (let col = 0; col < cols; col += pointStep) {
+          if (!inDoubleSechMask(row, col)) continue;
+          const theta = Math.PI / 2 - (rows <= 1 ? 0 : row / (rows - 1)) * Math.PI * 2;
+          const radius = rMax * (0.08 + 0.9 * (cols <= 1 ? 0 : col / (cols - 1)));
+          ctx.fillStyle = nodeIsOverlap(row) ? "rgba(243, 179, 61, 0.88)" : "rgba(0, 112, 124, 0.46)";
+          ctx.beginPath();
+          ctx.arc(cx + Math.cos(theta) * radius, cy - Math.sin(theta) * radius, pointRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      els.fieldInfo.textContent =
+        `${rows} x ${cols} nodes${pointStep > 1 ? `, showing every ${pointStep}th node` : ""}${hasOverlap ? `, overlap rows highlighted: ${overlap}` : ""}`;
     }
 
     function drawCurrentFrame() {
@@ -2238,6 +2564,21 @@ const APPLET_HTML = raw"""
         lastDisplayFrame.retinalRows,
         lastDisplayFrame.retinalCols
       );
+      if (els.frameSelect.value === "field") drawFieldGraph();
+    }
+
+    function updateFramePanel() {
+      const selected = els.frameSelect.value;
+      els.framePanels.forEach((panel) => {
+        panel.classList.toggle("hidden-control", panel.dataset.frame !== selected);
+      });
+      if (selected === "stimulus") {
+        drawStimulusGraph(lastDisplayFrame?.t || 0);
+      } else if (selected === "kernel") {
+        drawKernelGraph();
+      } else if (selected === "field") {
+        drawFieldGraph();
+      }
     }
 
     function decodeFrame(data) {
@@ -2270,7 +2611,7 @@ const APPLET_HTML = raw"""
       }
       params.set("partial_reflect_strength", els.partialReflectStrength.value);
       params.set("coupling", els.coupling.value);
-      params.set("speed", els.speed.value);
+      params.set("speed", String(currentSpeedValue()));
       params.set("kernel_cutoff", els.kernelCutoff.value);
       params.set("A", els.amp.value);
       params.set("T", els.period.value);
@@ -2282,6 +2623,79 @@ const APPLET_HTML = raw"""
       params.set("dt", els.dt.value);
       if (els.seed.value.trim()) params.set("seed", els.seed.value.trim());
       return params;
+    }
+
+    function collectParameterSnapshot() {
+      return {
+        visualization: {
+          fps: Number(els.fps.value) || 30,
+          speed: els.maxSpeed.checked ? "max" : Number(els.speed.value) || 1,
+          colormap: els.colorMap.value,
+          activity_scale: els.activityScale.value
+        },
+        backend: {
+          backend: els.backend.value,
+          convolution: els.conv.value,
+          kernel_cutoff: Number(els.kernelCutoff.value) || 3,
+          seed: els.seed.value.trim() || null,
+          fast_n: els.fastN.checked
+        },
+        boundary: {
+          boundary: els.fieldGeometry.value === "double_sech" ? els.boundary.value : null,
+          boundary_x: els.fieldGeometry.value === "double_sech" ? null : els.boundaryX.value,
+          boundary_y: els.fieldGeometry.value === "double_sech" ? null : els.boundaryY.value,
+          reflect_gain: boundaryHasReflection() ? Number(els.partialReflectStrength.value) || 0 : null
+        },
+        coupling: {
+          mode: els.coupling.value,
+          overlap_rows: Number(els.overlapRows.value) || 0,
+          g: Number(els.couplingStrength.value) || 0
+        },
+        strobe: {
+          amplitude: Number(els.amp.value) || 0,
+          period_ms: Number(els.period.value) || 0,
+          duty_cycle_percent: Number(els.duty.value) || 0
+        },
+        neural_field: {
+          geometry: els.fieldGeometry.value,
+          density: els.fieldGeometry.value === "double_sech" ? Number(els.fieldDensity.value) || 1 : null,
+          N: els.fieldGeometry.value === "double_sech" ? null : Number(els.n.value) || 0,
+          sigma_e: Number(els.se.value) || 0,
+          sigma_i: Number(els.si.value) || 0,
+          dt_ms: Number(els.dt.value) || 0
+        }
+      };
+    }
+
+    function printParameters(label = "Current parameters") {
+      const params = streamParams();
+      const query = params.toString();
+      const snapshot = collectParameterSnapshot();
+      els.paramOutput.textContent =
+        `${label}\n${JSON.stringify(snapshot, null, 2)}\n\nstream query:\n${query}\n\nstream path:\n/stream?${query}`;
+    }
+
+    function setControlValue(id, value) {
+      const el = els[id];
+      if (!el || value === undefined) return;
+      el.value = String(value);
+    }
+
+    function applyPreset(key) {
+      const preset = presets[key];
+      if (!preset) return;
+      const values = preset.values;
+      Object.entries(values).forEach(([id, value]) => setControlValue(id, value));
+      if (values.fieldGeometry === "square") {
+        els.fieldDensity.value = "1";
+      }
+      applyGeometryDefaults();
+      syncReflectControl();
+      drawKernelGraph();
+      drawStimulusGraph(lastDisplayFrame?.t || 0);
+      drawFieldGraph();
+      printParameters(`Applied preset: ${preset.label}`);
+      resetStream();
     }
 
     function syncGeometryControls() {
@@ -2298,6 +2712,7 @@ const APPLET_HTML = raw"""
       els.boundary.disabled = !isDoubleSech;
       els.boundaryX.disabled = isDoubleSech;
       els.boundaryY.disabled = isDoubleSech;
+      syncReflectControl();
     }
 
     function syncConvolutionControls() {
@@ -2336,6 +2751,7 @@ const APPLET_HTML = raw"""
         setOptionAvailable(els.conv, "fft", true);
         els.conv.disabled = false;
       }
+      syncReflectControl();
     }
 
     function applyGeometryDefaults() {
@@ -2349,12 +2765,12 @@ const APPLET_HTML = raw"""
     function sendVisualizationUpdate() {
       visualizationUpdateTimer = null;
       const fps = Math.max(1, Math.round(Number(els.fps.value) || 30));
-      const speed = Math.max(0, Number(els.speed.value) || 0);
+      const speed = currentSpeedValue();
       const activityScale = els.activityScale.value === "simulation" ? "simulation" : "frame";
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(`visual:fps=${fps}&speed=${speed}&activity_scale=${activityScale}`);
         const scaleText = activityScale === "simulation" ? "simulation min/max" : "frame min/max";
-        els.status.textContent = `Updated visualization: target ${fps} fps, target speed ${speed === 0 ? "max" : `${speed}x`}, activity scale ${scaleText}. Simulation state preserved.`;
+        els.status.textContent = `Updated visualization: target ${fps} fps, target speed ${formatSpeed(speed)}, activity scale ${scaleText}. Simulation state preserved.`;
       }
     }
 
@@ -2366,8 +2782,12 @@ const APPLET_HTML = raw"""
     function startStream() {
       stopStream();
       applyGeometryDefaults();
+      syncReflectControl();
+      syncSpeedControls();
       resetMetrics();
       drawKernelGraph();
+      drawFieldGraph();
+      updateFramePanel();
       updateLegend();
       lastDisplayFrame = null;
       setPauseUi(false);
@@ -2390,13 +2810,20 @@ const APPLET_HTML = raw"""
         if (msg.type === "hello") {
           const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
           const coupling = msg.coupling === "overlap" ? `, overlap g=${msg.couplingStrength}` : (msg.coupling === "no_connection" || msg.fieldGeometry === "double_sech") ? ", two hemispheres no connection" : "";
+          if (msg.speed === 0) {
+            els.maxSpeed.checked = true;
+          } else {
+            els.maxSpeed.checked = false;
+            els.speed.value = String(msg.speed);
+          }
+          syncSpeedControls();
           streamStimulus = {
             A: Number(msg.A) || 0,
             period: Number(msg.T) || 1,
             duty: msg.dutyCycle === null ? Number(els.duty.value) || 50 : Number(msg.dutyCycle)
           };
           drawStimulusGraph(0);
-          const speedText = msg.speed === 0 ? "max speed" : `${msg.speed}x speed`;
+          const speedText = msg.speed === 0 ? "max speed" : `${formatSpeed(msg.speed)} speed`;
           if (msg.activityScale) els.activityScale.value = msg.activityScale;
           const scaleText = msg.activityScale === "simulation" ? "simulation min/max" : "frame min/max";
           const geometryText = msg.fieldGeometry === "double_sech" ? `, double-sech V1 density ${msg.fieldDensity}` : "";
@@ -2433,7 +2860,7 @@ const APPLET_HTML = raw"""
         const retinalCols = msg.retinalCols || msg.retinalN || msg.N;
         lastDisplayFrame = { values, rows, cols, retinalValues, retinalRows, retinalCols, t: msg.t };
         drawCurrentFrame();
-        els.simTime.textContent = `${msg.t.toFixed(1)} ms`;
+        els.simTime.textContent = formatSimTime(msg.t);
         els.streamFps.textContent = observedFps.toFixed(1);
         els.msStep.textContent = msg.msPerStep.toFixed(3);
         els.rtx.textContent = actualRealtimeX.toFixed(2);
@@ -2527,7 +2954,19 @@ const APPLET_HTML = raw"""
     });
     els.fps.addEventListener("input", () => queueVisualizationUpdate(160));
     els.speed.addEventListener("change", () => queueVisualizationUpdate(0));
+    els.speed.addEventListener("input", () => queueVisualizationUpdate(180));
+    els.maxSpeed.addEventListener("change", () => {
+      syncSpeedControls();
+      queueVisualizationUpdate(0);
+    });
     els.activityScale.addEventListener("change", () => queueVisualizationUpdate(0));
+    els.frameSelect.addEventListener("change", () => {
+      updateFramePanel();
+    });
+    document.querySelectorAll("[data-preset]").forEach((button) => {
+      button.addEventListener("click", () => applyPreset(button.dataset.preset));
+    });
+    els.printParams.addEventListener("click", () => printParameters());
     els.colorMap.addEventListener("change", () => {
       updateLegend();
       drawCurrentFrame();
@@ -2549,11 +2988,22 @@ const APPLET_HTML = raw"""
     [
       els.n, els.fieldDensity, els.kernelCutoff, els.se, els.si
     ].forEach((el) => el.addEventListener("input", drawKernelGraph));
+    [
+      els.n, els.fieldDensity, els.overlapRows, els.coupling, els.fieldGeometry
+    ].forEach((el) => {
+      el.addEventListener("input", drawFieldGraph);
+      el.addEventListener("change", drawFieldGraph);
+    });
     window.addEventListener("resize", () => {
       drawKernelGraph();
       drawStimulusGraph(lastDisplayFrame?.t || 0);
+      drawFieldGraph();
     });
+    syncSpeedControls();
+    syncReflectControl();
     drawKernelGraph();
+    drawFieldGraph();
+    updateFramePanel();
     updateLegend();
     startStream();
   </script>
