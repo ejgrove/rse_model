@@ -1848,6 +1848,22 @@ const APPLET_HTML = raw"""
       image-rendering: auto;
     }
 
+    .phase-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      margin: 0 0 8px;
+    }
+
+    .phase-options label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.03em;
+    }
+
     .tiny-note {
       margin-top: 8px;
       color: var(--muted);
@@ -2053,6 +2069,10 @@ const APPLET_HTML = raw"""
         </div>
         <div id="phasePanel" class="frame-panel hidden-control" data-frame="phase">
           <div class="view-head"><div class="view-title">Phase plane</div><div class="view-note" id="phaseInfo">E/I firing-rate state cloud</div></div>
+          <div class="phase-options">
+            <label><input id="phaseColoredNodes" type="checkbox" checked> Colored nodes</label>
+            <label><input id="phaseIncludeAverage" type="checkbox" checked> Include average</label>
+          </div>
           <canvas id="phaseGraph" class="phase-canvas"></canvas>
         </div>
       </div>
@@ -2137,6 +2157,8 @@ const APPLET_HTML = raw"""
       fieldInfo: document.getElementById("fieldInfo"),
       phaseGraph: document.getElementById("phaseGraph"),
       phaseInfo: document.getElementById("phaseInfo"),
+      phaseColoredNodes: document.getElementById("phaseColoredNodes"),
+      phaseIncludeAverage: document.getElementById("phaseIncludeAverage"),
       legend: document.getElementById("legend"),
       legendLow: document.getElementById("legendLow"),
       legendHigh: document.getElementById("legendHigh")
@@ -2803,6 +2825,28 @@ const APPLET_HTML = raw"""
       const plotH = height - padT - padB;
       const xFor = (value) => padL + (value / 255) * plotW;
       const yFor = (value) => padT + (1 - value / 255) * plotH;
+      const dotPath = (x, y, radius) => {
+        ctx.moveTo(x + radius, y);
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+      };
+      const hsvToRgb = (h, s, v) => {
+        const c = v * s;
+        const hp = ((h % 360) + 360) % 360 / 60;
+        const x = c * (1 - Math.abs((hp % 2) - 1));
+        let r1 = 0, g1 = 0, b1 = 0;
+        if (hp < 1) [r1, g1, b1] = [c, x, 0];
+        else if (hp < 2) [r1, g1, b1] = [x, c, 0];
+        else if (hp < 3) [r1, g1, b1] = [0, c, x];
+        else if (hp < 4) [r1, g1, b1] = [0, x, c];
+        else if (hp < 5) [r1, g1, b1] = [x, 0, c];
+        else [r1, g1, b1] = [c, 0, x];
+        const m = v - c;
+        return [
+          Math.round((r1 + m) * 255),
+          Math.round((g1 + m) * 255),
+          Math.round((b1 + m) * 255)
+        ];
+      };
 
       ctx.strokeStyle = "#dbe7ef";
       ctx.lineWidth = 1 * dpr;
@@ -2837,6 +2881,8 @@ const APPLET_HTML = raw"""
       const phaseE = lastDisplayFrame?.phaseEValues || new Uint8Array();
       const phaseI = lastDisplayFrame?.phaseIValues || new Uint8Array();
       const n = Math.min(lastDisplayFrame?.phaseCount || phaseE.length, phaseE.length, phaseI.length);
+      const coloredNodes = els.phaseColoredNodes?.checked ?? true;
+      const includeAverage = els.phaseIncludeAverage?.checked ?? true;
       if (n === 0) {
         ctx.fillStyle = "#607284";
         ctx.font = `${12 * dpr}px IBM Plex Sans, sans-serif`;
@@ -2846,27 +2892,45 @@ const APPLET_HTML = raw"""
       } else {
         let meanE = 0;
         let meanI = 0;
-        const pointSize = Math.max(1, Math.min(2.2, 36 / Math.sqrt(n)) * dpr);
-        ctx.fillStyle = "rgba(0, 158, 170, 0.26)";
-        for (let idx = 0; idx < n; idx++) {
-          const e = phaseE[idx];
-          const i = phaseI[idx];
-          meanE += e;
-          meanI += i;
-          ctx.fillRect(xFor(e) - pointSize / 2, yFor(i) - pointSize / 2, pointSize, pointSize);
+        const pointRadius = Math.max(0.85, Math.min(2.1, 32 / Math.sqrt(n)) * dpr);
+        if (coloredNodes) {
+          for (let idx = 0; idx < n; idx++) {
+            const e = phaseE[idx];
+            const i = phaseI[idx];
+            meanE += e;
+            meanI += i;
+            const [r, g, b] = hsvToRgb((idx / Math.max(1, n)) * 360, 0.78, 0.88);
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.62)`;
+            ctx.beginPath();
+            dotPath(xFor(e), yFor(i), pointRadius);
+            ctx.fill();
+          }
+        } else {
+          ctx.fillStyle = "rgba(0, 158, 170, 0.34)";
+          ctx.beginPath();
+          for (let idx = 0; idx < n; idx++) {
+            const e = phaseE[idx];
+            const i = phaseI[idx];
+            meanE += e;
+            meanI += i;
+            dotPath(xFor(e), yFor(i), pointRadius);
+          }
+          ctx.fill();
         }
         meanE /= n;
         meanI /= n;
 
-        ctx.fillStyle = "#f3b33d";
-        ctx.strokeStyle = "#0b3146";
-        ctx.lineWidth = 1.2 * dpr;
-        ctx.beginPath();
-        ctx.arc(xFor(meanE), yFor(meanI), 4.2 * dpr, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+        if (includeAverage) {
+          ctx.fillStyle = "#071018";
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.4 * dpr;
+          ctx.beginPath();
+          ctx.arc(xFor(meanE), yFor(meanI), 4.8 * dpr, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
         els.phaseInfo.textContent =
-          `${n.toLocaleString()} nodes, mean E=${(meanE / 255).toFixed(3)}, mean I=${(meanI / 255).toFixed(3)}`;
+          `${n.toLocaleString()} nodes, mean E=${(meanE / 255).toFixed(3)}, mean I=${(meanI / 255).toFixed(3)}${coloredNodes ? ", HSV nodes" : ""}${includeAverage ? "" : ", average hidden"}`;
       }
 
       ctx.fillStyle = "#607284";
@@ -3325,6 +3389,9 @@ const APPLET_HTML = raw"""
     els.activityScale.addEventListener("change", () => queueVisualizationUpdate(0));
     els.frameSelect.addEventListener("change", () => {
       updateFramePanel();
+    });
+    [els.phaseColoredNodes, els.phaseIncludeAverage].forEach((el) => {
+      el.addEventListener("change", drawPhasePlane);
     });
     document.querySelectorAll("[data-preset]").forEach((button) => {
       button.addEventListener("click", () => applyPreset(button.dataset.preset));
