@@ -48,6 +48,9 @@ Base.@kwdef struct LiveFrame
     steps_per_frame::Int
     data::Vector{UInt8}
     retinal_data::Vector{UInt8}
+    phase_count::Int
+    phase_e_data::Vector{UInt8}
+    phase_i_data::Vector{UInt8}
 end
 
 Base.@kwdef mutable struct LiveRuntime
@@ -283,6 +286,55 @@ function _activity_bytes(activity::AbstractMatrix; lo=nothing, hi=nothing)
     return bytes, lo_value, hi_value
 end
 
+function _phase_rate_byte(value)
+    return UInt8(round(Int, 255 * clamp(Float32(value), 0.0f0, 1.0f0)))
+end
+
+function _phase_bytes(
+    Ue::AbstractMatrix,
+    Ui::AbstractMatrix;
+    mask::Union{Nothing,AbstractMatrix{Bool}}=nothing,
+)
+    rows, cols = size(Ue)
+    size(Ui) == (rows, cols) || throw(ArgumentError("Ue and Ui phase matrices must have matching sizes."))
+    if mask !== nothing && size(mask) != (rows, cols)
+        throw(ArgumentError("phase mask must match the firing-rate matrices."))
+    end
+
+    count_valid = mask === nothing ? length(Ue) : count(mask)
+    e_bytes = Vector{UInt8}(undef, count_valid)
+    i_bytes = Vector{UInt8}(undef, count_valid)
+    idx = 1
+
+    @inbounds for col in 1:cols, row in 1:rows
+        if mask === nothing || mask[row, col]
+            e_bytes[idx] = _phase_rate_byte(Ue[row, col])
+            i_bytes[idx] = _phase_rate_byte(Ui[row, col])
+            idx += 1
+        end
+    end
+
+    return e_bytes, i_bytes
+end
+
+function _phase_bytes(
+    Ue_left::AbstractMatrix,
+    Ui_left::AbstractMatrix,
+    Ue_right::AbstractMatrix,
+    Ui_right::AbstractMatrix;
+    mask::Union{Nothing,AbstractMatrix{Bool}}=nothing,
+)
+    left_e, left_i = _phase_bytes(Ue_left, Ui_left; mask=mask)
+    right_e, right_i = _phase_bytes(Ue_right, Ui_right; mask=mask)
+    e_bytes = Vector{UInt8}(undef, length(left_e) + length(right_e))
+    i_bytes = Vector{UInt8}(undef, length(left_i) + length(right_i))
+    copyto!(e_bytes, 1, left_e, 1, length(left_e))
+    copyto!(e_bytes, length(left_e) + 1, right_e, 1, length(right_e))
+    copyto!(i_bytes, 1, left_i, 1, length(left_i))
+    copyto!(i_bytes, length(left_i) + 1, right_i, 1, length(right_i))
+    return e_bytes, i_bytes
+end
+
 function _activity_scale_bounds!(runtime::Union{Nothing,LiveRuntime}, activity::AbstractMatrix)
     frame_lo = Float32(minimum(activity))
     frame_hi = Float32(maximum(activity))
@@ -307,6 +359,8 @@ function _make_live_frame(
     retinal_activity::AbstractMatrix=activity,
     ;
     runtime::Union{Nothing,LiveRuntime}=nothing,
+    phase_e_data::Vector{UInt8}=UInt8[],
+    phase_i_data::Vector{UInt8}=UInt8[],
 )
     scale_lo, scale_hi = _activity_scale_bounds!(runtime, activity)
     bytes, lo, hi = _activity_bytes(activity; lo=scale_lo, hi=scale_hi)
@@ -334,6 +388,9 @@ function _make_live_frame(
         steps_per_frame=steps_per_frame,
         data=bytes,
         retinal_data=retinal_bytes,
+        phase_count=min(length(phase_e_data), length(phase_i_data)),
+        phase_e_data=phase_e_data,
+        phase_i_data=phase_i_data,
     )
 end
 
@@ -459,6 +516,7 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::Liv
         step_ms = (time_ns() - step_start) / 1e6
         activity = abs.(Ue .- Ui)
         retinal_activity = retinal_transform(activity; output_size=(config.N, config.N))
+        phase_e_data, phase_i_data = _phase_bytes(Ue, Ui; mask=has_field_mask(geometry) ? geometry.mask : nothing)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             activity,
@@ -470,6 +528,8 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::Liv
             p,
             retinal_activity;
             runtime=runtime,
+            phase_e_data=phase_e_data,
+            phase_i_data=phase_i_data,
         )
         callback(frame) === false && break
         _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
@@ -582,6 +642,13 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
         @. activity_right = abs(Ue_right - Ui_right)
         _fill_coupled_views!(display_activity, activity_left, activity_right)
         retinal_activity = _coupled_retinal_activity(activity_left, activity_right, retinal_source, geometry, config)
+        phase_e_data, phase_i_data = _phase_bytes(
+            Ue_left,
+            Ui_left,
+            Ue_right,
+            Ui_right;
+            mask=has_field_mask(geometry) ? geometry.mask : nothing,
+        )
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -593,6 +660,8 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
             p,
             retinal_activity;
             runtime=runtime,
+            phase_e_data=phase_e_data,
+            phase_i_data=phase_i_data,
         )
         callback(frame) === false && break
         _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
@@ -629,8 +698,6 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
     Uic = similar(Ui)
     noise_E = similar(Ue)
     noise_I = similar(Ui)
-    cortical_gpu = similar(Ue)
-
     step_idx = 0
     frame_idx = 0
 
@@ -687,10 +754,12 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
         Metal.synchronize()
         step_ms = (time_ns() - step_start) / 1e6
 
-        cortical_gpu .= abs.(Ue .- Ui)
         Metal.synchronize()
-        activity = Array(cortical_gpu)
+        phase_e = Array(Ue)
+        phase_i = Array(Ui)
+        activity = abs.(phase_e .- phase_i)
         retinal_activity = retinal_transform(activity; output_size=(config.N, config.N))
+        phase_e_data, phase_i_data = _phase_bytes(phase_e, phase_i; mask=has_field_mask(geometry) ? geometry.mask : nothing)
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             activity,
@@ -702,6 +771,8 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
             p,
             retinal_activity;
             runtime=runtime,
+            phase_e_data=phase_e_data,
+            phase_i_data=phase_i_data,
         )
         callback(frame) === false && break
         _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
@@ -752,8 +823,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
     noise_I_left = similar(Ui_left)
     noise_E_right = similar(Ue_right)
     noise_I_right = similar(Ui_right)
-    activity_left_gpu = similar(Ue_left)
-    activity_right_gpu = similar(Ue_right)
+    activity_left = Matrix{Float32}(undef, rows, cols)
+    activity_right = Matrix{Float32}(undef, rows, cols)
     display_activity = Matrix{Float32}(undef, rows, 2cols)
     retinal_source = Matrix{Float32}(undef, 2rows, cols)
 
@@ -882,13 +953,22 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
         Metal.synchronize()
         step_ms = (time_ns() - step_start) / 1e6
 
-        activity_left_gpu .= abs.(Ue_left .- Ui_left)
-        activity_right_gpu .= abs.(Ue_right .- Ui_right)
         Metal.synchronize()
-        activity_left = Array(activity_left_gpu)
-        activity_right = Array(activity_right_gpu)
+        phase_e_left = Array(Ue_left)
+        phase_i_left = Array(Ui_left)
+        phase_e_right = Array(Ue_right)
+        phase_i_right = Array(Ui_right)
+        @. activity_left = abs(phase_e_left - phase_i_left)
+        @. activity_right = abs(phase_e_right - phase_i_right)
         _fill_coupled_views!(display_activity, activity_left, activity_right)
         retinal_activity = _coupled_retinal_activity(activity_left, activity_right, retinal_source, geometry, config)
+        phase_e_data, phase_i_data = _phase_bytes(
+            phase_e_left,
+            phase_i_left,
+            phase_e_right,
+            phase_i_right;
+            mask=has_field_mask(geometry) ? geometry.mask : nothing,
+        )
         t = Float32(step_idx) * p.dt
         frame = _make_live_frame(
             display_activity,
@@ -900,6 +980,8 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
             p,
             retinal_activity;
             runtime=runtime,
+            phase_e_data=phase_e_data,
+            phase_i_data=phase_i_data,
         )
         callback(frame) === false && break
         _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
@@ -986,6 +1068,9 @@ function _frame_json(frame::LiveFrame)
         ",\"stepsPerFrame\":", frame.steps_per_frame,
         ",\"data\":", _json_string(base64encode(frame.data)),
         ",\"retinalData\":", _json_string(base64encode(frame.retinal_data)),
+        ",\"phaseCount\":", frame.phase_count,
+        ",\"phaseEData\":", _json_string(base64encode(frame.phase_e_data)),
+        ",\"phaseIData\":", _json_string(base64encode(frame.phase_i_data)),
         "}",
     )
 end
@@ -1757,6 +1842,12 @@ const APPLET_HTML = raw"""
       image-rendering: auto;
     }
 
+    .phase-canvas {
+      aspect-ratio: 1.45 / 1;
+      background: #f8fbfd;
+      image-rendering: auto;
+    }
+
     .tiny-note {
       margin-top: 8px;
       color: var(--muted);
@@ -1944,6 +2035,7 @@ const APPLET_HTML = raw"""
             <option value="stimulus">Stimulus</option>
             <option value="kernel">Kernel</option>
             <option value="field">Neural field</option>
+            <option value="phase">Phase plane</option>
           </select>
         </div>
         <div id="stimulusPanel" class="frame-panel" data-frame="stimulus">
@@ -1958,6 +2050,10 @@ const APPLET_HTML = raw"""
         <div id="fieldPanel" class="frame-panel hidden-control" data-frame="field">
           <div class="view-head"><div class="view-title">Neural field</div><div class="view-note" id="fieldInfo">node lattice and retinal projection</div></div>
           <canvas id="fieldGraph" class="field-canvas"></canvas>
+        </div>
+        <div id="phasePanel" class="frame-panel hidden-control" data-frame="phase">
+          <div class="view-head"><div class="view-title">Phase plane</div><div class="view-note" id="phaseInfo">E/I firing-rate state cloud</div></div>
+          <canvas id="phaseGraph" class="phase-canvas"></canvas>
         </div>
       </div>
       <div class="legend-wrap">
@@ -2039,6 +2135,8 @@ const APPLET_HTML = raw"""
       framePanels: Array.from(document.querySelectorAll(".frame-panel")),
       fieldGraph: document.getElementById("fieldGraph"),
       fieldInfo: document.getElementById("fieldInfo"),
+      phaseGraph: document.getElementById("phaseGraph"),
+      phaseInfo: document.getElementById("phaseInfo"),
       legend: document.getElementById("legend"),
       legendLow: document.getElementById("legendLow"),
       legendHigh: document.getElementById("legendHigh")
@@ -2680,6 +2778,125 @@ const APPLET_HTML = raw"""
         `${rows} x ${cols} nodes${pointStep > 1 ? `, showing every ${pointStep}th node` : ""}${hasOverlap ? `, overlap ${geometry === "double_sech" ? "border ring" : "rows"} highlighted: ${overlap}` : ""}`;
     }
 
+    function drawPhasePlane() {
+      const canvas = els.phaseGraph;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(420, Math.round(rect.width * dpr));
+      const height = Math.max(280, Math.round(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, width, height);
+      const bg = ctx.createLinearGradient(0, 0, width, height);
+      bg.addColorStop(0, "#ffffff");
+      bg.addColorStop(1, "#eef7f8");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, width, height);
+
+      const padL = 56 * dpr, padR = 18 * dpr, padT = 18 * dpr, padB = 48 * dpr;
+      const plotW = width - padL - padR;
+      const plotH = height - padT - padB;
+      const xFor = (value) => padL + (value / 255) * plotW;
+      const yFor = (value) => padT + (1 - value / 255) * plotH;
+
+      ctx.strokeStyle = "#dbe7ef";
+      ctx.lineWidth = 1 * dpr;
+      ctx.beginPath();
+      for (let i = 0; i <= 4; i++) {
+        const x = padL + (i / 4) * plotW;
+        const y = padT + (i / 4) * plotH;
+        ctx.moveTo(x, padT);
+        ctx.lineTo(x, padT + plotH);
+        ctx.moveTo(padL, y);
+        ctx.lineTo(padL + plotW, y);
+      }
+      ctx.stroke();
+
+      ctx.strokeStyle = "#8aa2af";
+      ctx.lineWidth = 1.2 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(padL, padT + plotH);
+      ctx.lineTo(padL + plotW, padT + plotH);
+      ctx.moveTo(padL, padT);
+      ctx.lineTo(padL, padT + plotH);
+      ctx.stroke();
+
+      ctx.setLineDash([4 * dpr, 4 * dpr]);
+      ctx.strokeStyle = "rgba(243, 179, 61, 0.72)";
+      ctx.beginPath();
+      ctx.moveTo(padL, padT + plotH);
+      ctx.lineTo(padL + plotW, padT);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const phaseE = lastDisplayFrame?.phaseEValues || new Uint8Array();
+      const phaseI = lastDisplayFrame?.phaseIValues || new Uint8Array();
+      const n = Math.min(lastDisplayFrame?.phaseCount || phaseE.length, phaseE.length, phaseI.length);
+      if (n === 0) {
+        ctx.fillStyle = "#607284";
+        ctx.font = `${12 * dpr}px IBM Plex Sans, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText("Waiting for a live frame...", padL + plotW / 2, padT + plotH / 2);
+        els.phaseInfo.textContent = "E/I firing-rate state cloud";
+      } else {
+        let meanE = 0;
+        let meanI = 0;
+        const pointSize = Math.max(1, Math.min(2.2, 36 / Math.sqrt(n)) * dpr);
+        ctx.fillStyle = "rgba(0, 158, 170, 0.26)";
+        for (let idx = 0; idx < n; idx++) {
+          const e = phaseE[idx];
+          const i = phaseI[idx];
+          meanE += e;
+          meanI += i;
+          ctx.fillRect(xFor(e) - pointSize / 2, yFor(i) - pointSize / 2, pointSize, pointSize);
+        }
+        meanE /= n;
+        meanI /= n;
+
+        ctx.fillStyle = "#f3b33d";
+        ctx.strokeStyle = "#0b3146";
+        ctx.lineWidth = 1.2 * dpr;
+        ctx.beginPath();
+        ctx.arc(xFor(meanE), yFor(meanI), 4.2 * dpr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        els.phaseInfo.textContent =
+          `${n.toLocaleString()} nodes, mean E=${(meanE / 255).toFixed(3)}, mean I=${(meanI / 255).toFixed(3)}`;
+      }
+
+      ctx.fillStyle = "#607284";
+      ctx.font = `${10 * dpr}px IBM Plex Sans, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (let i = 0; i <= 4; i++) {
+        const label = (i / 4).toFixed(i === 0 || i === 4 ? 0 : 2);
+        ctx.fillText(label, padL + (i / 4) * plotW, padT + plotH + 7 * dpr);
+      }
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      for (let i = 0; i <= 4; i++) {
+        const value = 1 - i / 4;
+        const label = value.toFixed(value === 0 || value === 1 ? 0 : 2);
+        ctx.fillText(label, padL - 8 * dpr, padT + (i / 4) * plotH);
+      }
+
+      ctx.fillStyle = "#0b3146";
+      ctx.font = `${11 * dpr}px IBM Plex Sans, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText("Excitatory firing rate (Ue)", padL + plotW / 2, height - 10 * dpr);
+      ctx.save();
+      ctx.translate(15 * dpr, padT + plotH / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText("Inhibitory firing rate (Ui)", 0, 0);
+      ctx.restore();
+    }
+
     function drawCurrentFrame() {
       if (!lastDisplayFrame) return;
       drawCortical(
@@ -2695,6 +2912,7 @@ const APPLET_HTML = raw"""
         lastDisplayFrame.retinalCols
       );
       if (els.frameSelect.value === "field") drawFieldGraph();
+      if (els.frameSelect.value === "phase") drawPhasePlane();
     }
 
     function updateFramePanel() {
@@ -2708,6 +2926,8 @@ const APPLET_HTML = raw"""
         drawKernelGraph();
       } else if (selected === "field") {
         drawFieldGraph();
+      } else if (selected === "phase") {
+        drawPhasePlane();
       }
     }
 
@@ -2988,7 +3208,20 @@ const APPLET_HTML = raw"""
         const retinalValues = decodeFrame(msg.retinalData || msg.data);
         const retinalRows = msg.retinalRows || msg.retinalN || msg.N;
         const retinalCols = msg.retinalCols || msg.retinalN || msg.N;
-        lastDisplayFrame = { values, rows, cols, retinalValues, retinalRows, retinalCols, t: msg.t };
+        const phaseEValues = msg.phaseEData ? decodeFrame(msg.phaseEData) : new Uint8Array();
+        const phaseIValues = msg.phaseIData ? decodeFrame(msg.phaseIData) : new Uint8Array();
+        lastDisplayFrame = {
+          values,
+          rows,
+          cols,
+          retinalValues,
+          retinalRows,
+          retinalCols,
+          phaseEValues,
+          phaseIValues,
+          phaseCount: msg.phaseCount || phaseEValues.length,
+          t: msg.t
+        };
         drawCurrentFrame();
         els.simTime.textContent = formatSimTime(msg.t);
         els.streamFps.textContent = observedFps.toFixed(1);
@@ -3131,6 +3364,7 @@ const APPLET_HTML = raw"""
       drawKernelGraph();
       drawStimulusGraph(lastDisplayFrame?.t || 0);
       drawFieldGraph();
+      drawPhasePlane();
     });
     syncSpeedControls();
     syncReflectControl();

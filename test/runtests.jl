@@ -574,6 +574,10 @@ end
         @test occursin("id=\"frameSelect\"", body)
         @test occursin("id=\"fieldGraph\"", body)
         @test occursin("id=\"fieldInfo\"", body)
+        @test occursin("value=\"phase\"", body)
+        @test occursin("id=\"phaseGraph\"", body)
+        @test occursin("id=\"phaseInfo\"", body)
+        @test occursin("function drawPhasePlane", body)
         @test occursin("nipy_spectral", body)
         @test occursin("id=\"stimulusGraph\"", body)
         @test occursin("id=\"fieldGeometry\"", body)
@@ -621,6 +625,9 @@ end
             @test occursin("\"cols\":50", frame)
             @test occursin("\"retinalRows\":25", frame)
             @test occursin("\"retinalCols\":25", frame)
+            @test occursin("\"phaseCount\":1250", frame)
+            @test occursin("\"phaseEData\":", frame)
+            @test occursin("\"phaseIData\":", frame)
         end
     finally
         close(server)
