@@ -2477,13 +2477,13 @@ const APPLET_HTML = raw"""
       const retainedI = Math.pow(kernelMass1d(si, radiusI) / kernelMass1d(si, fullRadius), 2) * 100;
       const maxRadius = Math.max(radiusE, radiusI, 4);
       const samples = [];
-      let maxValue = 0;
+      let maxAbsValue = 0;
       for (let x = -maxRadius; x <= maxRadius; x++) {
         const e = gaussian1dValue(x, se);
-        const i = gaussian1dValue(x, si);
-        const sum = e + i;
-        samples.push({ x, e, i, sum });
-        maxValue = Math.max(maxValue, e, i, sum);
+        const i = -gaussian1dValue(x, si);
+        const net = e + i;
+        samples.push({ x, e, i, net });
+        maxAbsValue = Math.max(maxAbsValue, Math.abs(e), Math.abs(i), Math.abs(net));
       }
 
       const ctx = canvas.getContext("2d");
@@ -2497,7 +2497,7 @@ const APPLET_HTML = raw"""
       const plotW = width - padL - padR;
       const plotH = height - padT - padB;
       const xToPx = (x) => padL + ((x + maxRadius) / (2 * maxRadius)) * plotW;
-      const yToPx = (v) => padT + (1 - v / maxValue) * plotH;
+      const yToPx = (v) => padT + (0.5 - v / (2 * maxAbsValue)) * plotH;
 
       ctx.lineWidth = 1 * dpr;
       ctx.strokeStyle = "#e1edf2";
@@ -2528,8 +2528,8 @@ const APPLET_HTML = raw"""
 
       ctx.strokeStyle = "#b9ccd7";
       ctx.beginPath();
-      ctx.moveTo(padL, padT + plotH);
-      ctx.lineTo(padL + plotW, padT + plotH);
+      ctx.moveTo(padL, yToPx(0));
+      ctx.lineTo(padL + plotW, yToPx(0));
       ctx.moveTo(xToPx(0), padT);
       ctx.lineTo(xToPx(0), padT + plotH);
       ctx.stroke();
@@ -2549,7 +2549,7 @@ const APPLET_HTML = raw"""
 
       drawLine("i", "#f3b33d");
       drawLine("e", "#009eaa");
-      drawLine("sum", "#0b3146");
+      drawLine("net", "#0b3146");
       ctx.fillStyle = "#607284";
       ctx.font = `${11 * dpr}px IBM Plex Sans, sans-serif`;
       ctx.textAlign = "left";
@@ -2562,11 +2562,11 @@ const APPLET_HTML = raw"""
       ctx.fillStyle = "#009eaa";
       ctx.fillText(`\u03c3\u2091, r=${radiusE}`, padL + 8 * dpr, padT + 14 * dpr);
       ctx.fillStyle = "#f3b33d";
-      ctx.fillText(`\u03c3\u1d62, r=${radiusI}`, padL + 110 * dpr, padT + 14 * dpr);
+      ctx.fillText(`-\u03c3\u1d62, r=${radiusI}`, padL + 110 * dpr, padT + 14 * dpr);
       ctx.fillStyle = "#0b3146";
-      ctx.fillText(`E + I`, padL + 212 * dpr, padT + 14 * dpr);
+      ctx.fillText(`E - I`, padL + 222 * dpr, padT + 14 * dpr);
       els.kernelInfo.textContent =
-        `r_e=ceil(${cutoff} x ${se})=${radiusE}; r_i=ceil(${cutoff} x ${si})=${radiusI}; mass ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%; dark curve is pointwise E + I`;
+        `r_e=ceil(${cutoff} x ${se})=${radiusE}; r_i=ceil(${cutoff} x ${si})=${radiusI}; mass ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%; inhibitory is plotted negative, dark curve is pointwise E - I`;
     }
 
     function drawRetinal(canvas, values, rows, cols) {
