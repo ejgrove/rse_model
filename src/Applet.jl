@@ -1843,7 +1843,7 @@ const APPLET_HTML = raw"""
     }
 
     .phase-canvas {
-      aspect-ratio: 1.45 / 1;
+      aspect-ratio: 1 / 1;
       background: #f8fbfd;
       image-rendering: auto;
     }
@@ -2044,6 +2044,12 @@ const APPLET_HTML = raw"""
           </div>
         </div>
       </div>
+      <div class="legend-wrap">
+        <span class="legend-label">Activity</span>
+        <span id="legendLow" class="legend-low">low</span>
+        <div id="legend" class="legend"></div>
+        <span id="legendHigh" class="legend-high">high</span>
+      </div>
       <div class="frame-card">
         <div class="frame-toolbar">
           <div class="view-title">Frames</div>
@@ -2070,17 +2076,10 @@ const APPLET_HTML = raw"""
         <div id="phasePanel" class="frame-panel hidden-control" data-frame="phase">
           <div class="view-head"><div class="view-title">Phase plane</div><div class="view-note" id="phaseInfo">E/I firing-rate state cloud</div></div>
           <div class="phase-options">
-            <label><input id="phaseColoredNodes" type="checkbox" checked> Colored nodes</label>
             <label><input id="phaseIncludeAverage" type="checkbox" checked> Include average</label>
           </div>
           <canvas id="phaseGraph" class="phase-canvas"></canvas>
         </div>
-      </div>
-      <div class="legend-wrap">
-        <span class="legend-label">Activity</span>
-        <span id="legendLow" class="legend-low">low</span>
-        <div id="legend" class="legend"></div>
-        <span id="legendHigh" class="legend-high">high</span>
       </div>
       <div id="status" class="status">Streaming starts automatically. Use Pause or Reset while tuning parameters.</div>
     </section>
@@ -2157,7 +2156,6 @@ const APPLET_HTML = raw"""
       fieldInfo: document.getElementById("fieldInfo"),
       phaseGraph: document.getElementById("phaseGraph"),
       phaseInfo: document.getElementById("phaseInfo"),
-      phaseColoredNodes: document.getElementById("phaseColoredNodes"),
       phaseIncludeAverage: document.getElementById("phaseIncludeAverage"),
       legend: document.getElementById("legend"),
       legendLow: document.getElementById("legendLow"),
@@ -2225,6 +2223,16 @@ const APPLET_HTML = raw"""
       A: Number(els.amp.value) || 0,
       period: Number(els.period.value) || 1,
       duty: Number(els.duty.value) || 50
+    };
+    const meanFieldParams = {
+      Aee: 10.0,
+      Aei: 12.0,
+      Aie: 8.5,
+      Aii: 3.0,
+      He: 2.0,
+      Hi: 3.5,
+      Ge: 1.0,
+      Gi: 0.0
     };
 
     function activeColorStops() {
@@ -2551,10 +2559,18 @@ const APPLET_HTML = raw"""
       return Math.sin(Math.PI * (0.5 - Math.max(0, Math.min(100, duty)) / 100));
     }
 
-    function strobeValue(t) {
-      const period = Math.max(1e-6, streamStimulus.period);
-      const threshold = stimulusThreshold(streamStimulus.duty);
-      return Math.sin((2 * Math.PI * t) / period) - threshold > 0 ? streamStimulus.A : 0;
+    function strobeValue(t, stimulus = streamStimulus) {
+      const period = Math.max(1e-6, stimulus.period);
+      const threshold = stimulusThreshold(stimulus.duty);
+      return Math.sin((2 * Math.PI * t) / period) - threshold > 0 ? stimulus.A : 0;
+    }
+
+    function controlStimulus() {
+      return {
+        A: Number(els.amp.value) || 0,
+        period: Math.max(1e-6, Number(els.period.value) || 1),
+        duty: Number(els.duty.value) || 50
+      };
     }
 
     function drawStimulusGraph(t = 0) {
@@ -2805,12 +2821,13 @@ const APPLET_HTML = raw"""
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
-      const width = Math.max(420, Math.round(rect.width * dpr));
-      const height = Math.max(280, Math.round(rect.height * dpr));
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
+      const size = Math.max(420, Math.round(Math.max(rect.width, 320) * dpr));
+      if (canvas.width !== size || canvas.height !== size) {
+        canvas.width = size;
+        canvas.height = size;
       }
+      const width = size;
+      const height = size;
 
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, width, height);
@@ -2820,103 +2837,130 @@ const APPLET_HTML = raw"""
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, width, height);
 
-      const padL = 56 * dpr, padR = 18 * dpr, padT = 18 * dpr, padB = 48 * dpr;
-      const plotW = width - padL - padR;
-      const plotH = height - padT - padB;
-      const xFor = (value) => padL + (value / 255) * plotW;
-      const yFor = (value) => padT + (1 - value / 255) * plotH;
+      const padL = 58 * dpr, padR = 20 * dpr, padT = 22 * dpr, padB = 54 * dpr;
+      const availableW = width - padL - padR;
+      const availableH = height - padT - padB;
+      const plotSize = Math.max(120 * dpr, Math.min(availableW, availableH));
+      const plotL = padL + (availableW - plotSize) / 2;
+      const plotT = padT + (availableH - plotSize) / 2;
+      const plotW = plotSize;
+      const plotH = plotSize;
+      const clampRate = (value) => Math.max(0, Math.min(1, value));
+      const xRate = (value) => plotL + clampRate(value) * plotW;
+      const yRate = (value) => plotT + (1 - clampRate(value)) * plotH;
+      const xFor = (value) => xRate(value / 255);
+      const yFor = (value) => yRate(value / 255);
       const dotPath = (x, y, radius) => {
         ctx.moveTo(x + radius, y);
         ctx.arc(x, y, radius, 0, Math.PI * 2);
       };
-      const hsvToRgb = (h, s, v) => {
-        const c = v * s;
-        const hp = ((h % 360) + 360) % 360 / 60;
-        const x = c * (1 - Math.abs((hp % 2) - 1));
-        let r1 = 0, g1 = 0, b1 = 0;
-        if (hp < 1) [r1, g1, b1] = [c, x, 0];
-        else if (hp < 2) [r1, g1, b1] = [x, c, 0];
-        else if (hp < 3) [r1, g1, b1] = [0, c, x];
-        else if (hp < 4) [r1, g1, b1] = [0, x, c];
-        else if (hp < 5) [r1, g1, b1] = [x, 0, c];
-        else [r1, g1, b1] = [c, 0, x];
-        const m = v - c;
-        return [
-          Math.round((r1 + m) * 255),
-          Math.round((g1 + m) * 255),
-          Math.round((b1 + m) * 255)
-        ];
+      const logit = (value) => {
+        const safe = Math.max(1e-5, Math.min(1 - 1e-5, value));
+        return Math.log(safe / (1 - safe));
+      };
+      const drawCurve = (sampler, color) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.2 * dpr;
+        ctx.beginPath();
+        let drawing = false;
+        for (let idx = 0; idx <= 256; idx++) {
+          const input = idx / 256;
+          const point = sampler(input);
+          const valid = Number.isFinite(point.x) && Number.isFinite(point.y) &&
+            point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1;
+          if (!valid) {
+            drawing = false;
+            continue;
+          }
+          const x = xRate(point.x);
+          const y = yRate(point.y);
+          if (!drawing) {
+            ctx.moveTo(x, y);
+            drawing = true;
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.stroke();
+      };
+      const drawMeanFieldNullclines = (stim) => {
+        const p = meanFieldParams;
+        drawCurve((ue) => ({
+          x: ue,
+          y: (p.Aee * ue - p.He + p.Ge * stim - logit(ue)) / p.Aie
+        }), "#009eaa");
+        drawCurve((ui) => ({
+          x: (logit(ui) + p.Aii * ui + p.Hi - p.Gi * stim) / p.Aei,
+          y: ui
+        }), "#f3b33d");
+
+        ctx.font = `${10 * dpr}px IBM Plex Sans, sans-serif`;
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#009eaa";
+        ctx.fillText("dUe/dt=0", plotL + plotW - 4 * dpr, plotT + 14 * dpr);
+        ctx.fillStyle = "#b37500";
+        ctx.fillText("dUi/dt=0", plotL + plotW - 4 * dpr, plotT + 30 * dpr);
       };
 
       ctx.strokeStyle = "#dbe7ef";
       ctx.lineWidth = 1 * dpr;
       ctx.beginPath();
       for (let i = 0; i <= 4; i++) {
-        const x = padL + (i / 4) * plotW;
-        const y = padT + (i / 4) * plotH;
-        ctx.moveTo(x, padT);
-        ctx.lineTo(x, padT + plotH);
-        ctx.moveTo(padL, y);
-        ctx.lineTo(padL + plotW, y);
+        const x = plotL + (i / 4) * plotW;
+        const y = plotT + (i / 4) * plotH;
+        ctx.moveTo(x, plotT);
+        ctx.lineTo(x, plotT + plotH);
+        ctx.moveTo(plotL, y);
+        ctx.lineTo(plotL + plotW, y);
       }
       ctx.stroke();
 
       ctx.strokeStyle = "#8aa2af";
       ctx.lineWidth = 1.2 * dpr;
       ctx.beginPath();
-      ctx.moveTo(padL, padT + plotH);
-      ctx.lineTo(padL + plotW, padT + plotH);
-      ctx.moveTo(padL, padT);
-      ctx.lineTo(padL, padT + plotH);
+      ctx.moveTo(plotL, plotT + plotH);
+      ctx.lineTo(plotL + plotW, plotT + plotH);
+      ctx.moveTo(plotL, plotT);
+      ctx.lineTo(plotL, plotT + plotH);
       ctx.stroke();
 
       ctx.setLineDash([4 * dpr, 4 * dpr]);
-      ctx.strokeStyle = "rgba(243, 179, 61, 0.72)";
+      ctx.strokeStyle = "rgba(13, 38, 56, 0.26)";
       ctx.beginPath();
-      ctx.moveTo(padL, padT + plotH);
-      ctx.lineTo(padL + plotW, padT);
+      ctx.moveTo(plotL, plotT + plotH);
+      ctx.lineTo(plotL + plotW, plotT);
       ctx.stroke();
       ctx.setLineDash([]);
+
+      const currentT = lastDisplayFrame?.t || 0;
+      const currentStim = strobeValue(currentT, controlStimulus());
+      drawMeanFieldNullclines(currentStim);
 
       const phaseE = lastDisplayFrame?.phaseEValues || new Uint8Array();
       const phaseI = lastDisplayFrame?.phaseIValues || new Uint8Array();
       const n = Math.min(lastDisplayFrame?.phaseCount || phaseE.length, phaseE.length, phaseI.length);
-      const coloredNodes = els.phaseColoredNodes?.checked ?? true;
       const includeAverage = els.phaseIncludeAverage?.checked ?? true;
       if (n === 0) {
         ctx.fillStyle = "#607284";
         ctx.font = `${12 * dpr}px IBM Plex Sans, sans-serif`;
         ctx.textAlign = "center";
-        ctx.fillText("Waiting for a live frame...", padL + plotW / 2, padT + plotH / 2);
+        ctx.fillText("Waiting for a live frame...", plotL + plotW / 2, plotT + plotH / 2);
         els.phaseInfo.textContent = "E/I firing-rate state cloud";
       } else {
         let meanE = 0;
         let meanI = 0;
         const pointRadius = Math.max(0.85, Math.min(2.1, 32 / Math.sqrt(n)) * dpr);
-        if (coloredNodes) {
-          for (let idx = 0; idx < n; idx++) {
-            const e = phaseE[idx];
-            const i = phaseI[idx];
-            meanE += e;
-            meanI += i;
-            const [r, g, b] = hsvToRgb((idx / Math.max(1, n)) * 360, 0.78, 0.88);
-            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.62)`;
-            ctx.beginPath();
-            dotPath(xFor(e), yFor(i), pointRadius);
-            ctx.fill();
-          }
-        } else {
-          ctx.fillStyle = "rgba(0, 158, 170, 0.34)";
-          ctx.beginPath();
-          for (let idx = 0; idx < n; idx++) {
-            const e = phaseE[idx];
-            const i = phaseI[idx];
-            meanE += e;
-            meanI += i;
-            dotPath(xFor(e), yFor(i), pointRadius);
-          }
-          ctx.fill();
+        ctx.fillStyle = "rgba(0, 87, 99, 0.34)";
+        ctx.beginPath();
+        for (let idx = 0; idx < n; idx++) {
+          const e = phaseE[idx];
+          const i = phaseI[idx];
+          meanE += e;
+          meanI += i;
+          dotPath(xFor(e), yFor(i), pointRadius);
         }
+        ctx.fill();
         meanE /= n;
         meanI /= n;
 
@@ -2930,7 +2974,7 @@ const APPLET_HTML = raw"""
           ctx.stroke();
         }
         els.phaseInfo.textContent =
-          `${n.toLocaleString()} nodes, mean E=${(meanE / 255).toFixed(3)}, mean I=${(meanI / 255).toFixed(3)}${coloredNodes ? ", HSV nodes" : ""}${includeAverage ? "" : ", average hidden"}`;
+          `${n.toLocaleString()} nodes, mean E=${(meanE / 255).toFixed(3)}, mean I=${(meanI / 255).toFixed(3)}, S=${currentStim.toFixed(3)}${includeAverage ? "" : ", average hidden"}`;
       }
 
       ctx.fillStyle = "#607284";
@@ -2939,23 +2983,23 @@ const APPLET_HTML = raw"""
       ctx.textBaseline = "top";
       for (let i = 0; i <= 4; i++) {
         const label = (i / 4).toFixed(i === 0 || i === 4 ? 0 : 2);
-        ctx.fillText(label, padL + (i / 4) * plotW, padT + plotH + 7 * dpr);
+        ctx.fillText(label, plotL + (i / 4) * plotW, plotT + plotH + 7 * dpr);
       }
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
       for (let i = 0; i <= 4; i++) {
         const value = 1 - i / 4;
         const label = value.toFixed(value === 0 || value === 1 ? 0 : 2);
-        ctx.fillText(label, padL - 8 * dpr, padT + (i / 4) * plotH);
+        ctx.fillText(label, plotL - 8 * dpr, plotT + (i / 4) * plotH);
       }
 
       ctx.fillStyle = "#0b3146";
       ctx.font = `${11 * dpr}px IBM Plex Sans, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "alphabetic";
-      ctx.fillText("Excitatory firing rate (Ue)", padL + plotW / 2, height - 10 * dpr);
+      ctx.fillText("Excitatory firing rate (Ue)", plotL + plotW / 2, height - 12 * dpr);
       ctx.save();
-      ctx.translate(15 * dpr, padT + plotH / 2);
+      ctx.translate(16 * dpr, plotT + plotH / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.fillText("Inhibitory firing rate (Ui)", 0, 0);
       ctx.restore();
@@ -3390,7 +3434,11 @@ const APPLET_HTML = raw"""
     els.frameSelect.addEventListener("change", () => {
       updateFramePanel();
     });
-    [els.phaseColoredNodes, els.phaseIncludeAverage].forEach((el) => {
+    [els.phaseIncludeAverage].forEach((el) => {
+      el.addEventListener("change", drawPhasePlane);
+    });
+    [els.amp, els.period, els.duty].forEach((el) => {
+      el.addEventListener("input", drawPhasePlane);
       el.addEventListener("change", drawPhasePlane);
     });
     document.querySelectorAll("[data-preset]").forEach((button) => {
