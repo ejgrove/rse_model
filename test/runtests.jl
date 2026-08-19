@@ -484,6 +484,11 @@ end
     @test !RSEModel._apply_visual_control!(runtime, "pause")
 
     p = ModelParams{Float32}()
+    @test RSEModel._steps_per_frame(30, 1.0, p) == 167
+    @test RSEModel._steps_per_frame(30, 0.1, p) == 17
+    @test RSEModel._steps_per_frame(30, 0.01, p) == 2
+    @test RSEModel._steps_per_frame(30, 0.0, p) == 167
+
     scale_runtime = RSEModel.LiveRuntime(activity_scale=:simulation)
     first_frame = RSEModel._make_live_frame(
         Float32[1 2; 3 4],
@@ -507,6 +512,7 @@ end
     )
     @test first_frame.lo == 1.0f0
     @test first_frame.hi == 4.0f0
+    @test first_frame.skip_interval == 0
     @test second_frame.lo == 1.0f0
     @test second_frame.hi == 6.0f0
 
@@ -561,8 +567,11 @@ end
         @test occursin("Amplitude", body)
         @test occursin("Period (ms)", body)
         @test occursin("Duty cycle (%)", body)
+        @test occursin("Stream FPS", body)
+        @test occursin("Skip interval", body)
         @test occursin("Max speed", body)
         @test occursin("id=\"maxSpeed\"", body)
+        @test occursin("id=\"skipInterval\"", body)
         @test occursin("&sigma;<sub>e</sub>", body)
         @test occursin("id=\"dt\"", body)
         @test occursin("value=\"no_connection\"", body)
@@ -635,6 +644,7 @@ end
             @test occursin("\"phaseCount\":1250", frame)
             @test occursin("\"phaseEData\":", frame)
             @test occursin("\"phaseIData\":", frame)
+            @test occursin("\"skipInterval\":999", frame)
         end
     finally
         close(server)

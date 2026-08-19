@@ -46,6 +46,7 @@ Base.@kwdef struct LiveFrame
     ms_per_step::Float64
     realtime_x::Float64
     steps_per_frame::Int
+    skip_interval::Int
     data::Vector{UInt8}
     retinal_data::Vector{UInt8}
     phase_count::Int
@@ -262,13 +263,14 @@ function _live_field_geometry(config::LiveConfig)
     return field_geometry(:square, config.N)
 end
 
-function _steps_per_frame(target_fps::Integer, p::ModelParams)
+function _steps_per_frame(target_fps::Integer, speed::Real, p::ModelParams)
     target_frame_ms = 1000 / max(1, target_fps)
-    return max(1, round(Int, target_frame_ms / p.dt))
+    effective_speed = speed <= 0 ? one(Float64) : Float64(speed)
+    return max(1, round(Int, target_frame_ms * effective_speed / p.dt))
 end
 
 function _steps_per_frame(config::LiveConfig, p::ModelParams)
-    return _steps_per_frame(config.target_fps, p)
+    return _steps_per_frame(config.target_fps, config.speed, p)
 end
 
 function _activity_bytes(activity::AbstractMatrix; lo=nothing, hi=nothing)
@@ -369,6 +371,7 @@ function _make_live_frame(
     sim_ms = steps_per_frame * Float64(p.dt)
     ms_per_step = step_ms / steps_per_frame
     realtime_x = step_ms == 0 ? Inf : sim_ms / step_ms
+    skip_interval = max(0, Int(steps_per_frame) - 1)
 
     return LiveFrame(
         frame=Int(frame_idx),
@@ -386,6 +389,7 @@ function _make_live_frame(
         ms_per_step=ms_per_step,
         realtime_x=realtime_x,
         steps_per_frame=steps_per_frame,
+        skip_interval=skip_interval,
         data=bytes,
         retinal_data=retinal_bytes,
         phase_count=min(length(phase_e_data), length(phase_i_data)),
@@ -431,15 +435,14 @@ function _reset_throttle!(runtime::LiveRuntime)
     return
 end
 
-function _throttle!(runtime::LiveRuntime, frame_start_ns::UInt64, frame_sim_ms::Float64)
+function _throttle!(runtime::LiveRuntime, frame_start_ns::UInt64)
     yield()
-    speed = runtime.speed
-    if speed <= 0
+    if runtime.speed <= 0
         _reset_throttle!(runtime)
         return
     end
 
-    interval_ns = UInt64(max(0, round(Int, frame_sim_ms * 1e6 / speed)))
+    interval_ns = UInt64(max(0, round(Int, 1e9 / max(1, runtime.target_fps))))
     now_ns = time_ns()
     previous_deadline = runtime.throttle_deadline_ns
     deadline_ns = if previous_deadline == 0 || now_ns > previous_deadline + max(interval_ns, UInt64(50_000_000))
@@ -489,7 +492,7 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::Liv
     frame_idx = 0
 
     while config.max_frames == 0 || frame_idx < config.max_frames
-        steps_per_frame = _steps_per_frame(runtime.target_fps, p)
+        steps_per_frame = _steps_per_frame(runtime.target_fps, runtime.speed, p)
         frame_idx += 1
         frame_start = time_ns()
         step_start = time_ns()
@@ -532,7 +535,7 @@ function _stream_cpu_frames(callback::Function, config::LiveConfig, runtime::Liv
             phase_i_data=phase_i_data,
         )
         callback(frame) === false && break
-        _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
+        _throttle!(runtime, frame_start)
     end
 
     return frame_idx
@@ -574,7 +577,7 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
     frame_idx = 0
 
     while config.max_frames == 0 || frame_idx < config.max_frames
-        steps_per_frame = _steps_per_frame(runtime.target_fps, p)
+        steps_per_frame = _steps_per_frame(runtime.target_fps, runtime.speed, p)
         frame_idx += 1
         frame_start = time_ns()
         step_start = time_ns()
@@ -664,7 +667,7 @@ function _stream_cpu_coupled_frames(callback::Function, config::LiveConfig, runt
             phase_i_data=phase_i_data,
         )
         callback(frame) === false && break
-        _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
+        _throttle!(runtime, frame_start)
     end
 
     return frame_idx
@@ -702,7 +705,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
     frame_idx = 0
 
     while config.max_frames == 0 || frame_idx < config.max_frames
-        steps_per_frame = _steps_per_frame(runtime.target_fps, p)
+        steps_per_frame = _steps_per_frame(runtime.target_fps, runtime.speed, p)
         frame_idx += 1
         frame_start = time_ns()
         step_start = time_ns()
@@ -775,7 +778,7 @@ function _stream_metal_frames(callback::Function, config::LiveConfig, runtime::L
             phase_i_data=phase_i_data,
         )
         callback(frame) === false && break
-        _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
+        _throttle!(runtime, frame_start)
     end
 
     return frame_idx
@@ -832,7 +835,7 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
     frame_idx = 0
 
     while config.max_frames == 0 || frame_idx < config.max_frames
-        steps_per_frame = _steps_per_frame(runtime.target_fps, p)
+        steps_per_frame = _steps_per_frame(runtime.target_fps, runtime.speed, p)
         frame_idx += 1
         frame_start = time_ns()
         step_start = time_ns()
@@ -984,7 +987,7 @@ function _stream_metal_coupled_frames(callback::Function, config::LiveConfig, ru
             phase_i_data=phase_i_data,
         )
         callback(frame) === false && break
-        _throttle!(runtime, frame_start, Float64(steps_per_frame) * Float64(p.dt))
+        _throttle!(runtime, frame_start)
     end
 
     return frame_idx
@@ -1066,6 +1069,7 @@ function _frame_json(frame::LiveFrame)
         ",\"msPerStep\":", _json_number(frame.ms_per_step; digits=5),
         ",\"realtimeX\":", _json_number(frame.realtime_x),
         ",\"stepsPerFrame\":", frame.steps_per_frame,
+        ",\"skipInterval\":", frame.skip_interval,
         ",\"data\":", _json_string(base64encode(frame.data)),
         ",\"retinalData\":", _json_string(base64encode(frame.retinal_data)),
         ",\"phaseCount\":", frame.phase_count,
@@ -1527,7 +1531,7 @@ const APPLET_HTML = raw"""
 
     .metrics {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 8px;
       align-items: start;
       grid-auto-rows: 38px;
@@ -1627,6 +1631,10 @@ const APPLET_HTML = raw"""
 
     .canvas-frame canvas {
       width: 100%;
+    }
+
+    .retinal-frame {
+      padding: 30px 56px 28px;
     }
 
     .axis-label,
@@ -1930,8 +1938,8 @@ const APPLET_HTML = raw"""
       <div class="control-section">
         <div class="section-title">Visualization</div>
         <div class="control-grid">
-          <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
-          <label>Speed x<input id="speed" type="number" min="0.1" max="10" step="0.1" value="1"></label>
+          <label>Stream FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
+          <label>Speed x<input id="speed" type="number" min="0.01" max="10" step="0.01" value="1"></label>
           <label id="maxSpeedControl" class="check-row"><input id="maxSpeed" type="checkbox"> Max speed</label>
           <label class="wide">Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
           <label class="wide">Activity scale<select id="activityScale"><option value="frame">frame min/max</option><option value="simulation">simulation min/max</option></select></label>
@@ -2014,6 +2022,7 @@ const APPLET_HTML = raw"""
         <div class="metric"><span>Sim time</span><strong id="simTime">0 ms</strong></div>
         <div class="metric"><span>Stream FPS</span><strong id="streamFps">0</strong></div>
         <div class="metric"><span>ms / step</span><strong id="msStep">0</strong></div>
+        <div class="metric"><span>Skip interval</span><strong id="skipInterval">0</strong></div>
         <div class="metric"><span>Real-time x</span><strong id="rtx">0</strong></div>
       </div>
       <div class="views">
@@ -2140,6 +2149,7 @@ const APPLET_HTML = raw"""
       simTime: document.getElementById("simTime"),
       streamFps: document.getElementById("streamFps"),
       msStep: document.getElementById("msStep"),
+      skipInterval: document.getElementById("skipInterval"),
       rtx: document.getElementById("rtx"),
       stimulusGraph: document.getElementById("stimulusGraph"),
       stimulusInfo: document.getElementById("stimulusInfo"),
@@ -2268,7 +2278,7 @@ const APPLET_HTML = raw"""
     }
 
     function currentSpeedValue() {
-      return els.maxSpeed.checked ? 0 : Math.max(0.1, Number(els.speed.value) || 1);
+      return els.maxSpeed.checked ? 0 : Math.max(0.01, Number(els.speed.value) || 1);
     }
 
     function syncSpeedControls() {
@@ -2276,7 +2286,10 @@ const APPLET_HTML = raw"""
     }
 
     function formatSpeed(value) {
-      return value === 0 ? "max" : `${Number(value).toFixed(1).replace(/\.0$/, "")}x`;
+      if (value === 0) return "max";
+      const numeric = Number(value);
+      const digits = Math.abs(numeric) < 0.1 ? 2 : Math.abs(numeric) < 1 ? 2 : 1;
+      return `${numeric.toFixed(digits).replace(/\.?0+$/, "")}x`;
     }
 
     function boundaryHasReflection() {
@@ -2419,6 +2432,7 @@ const APPLET_HTML = raw"""
       els.simTime.textContent = "0 ms";
       els.streamFps.textContent = "0";
       els.msStep.textContent = "0";
+      els.skipInterval.textContent = "0";
       els.rtx.textContent = "0";
       els.legendLow.textContent = "low";
       els.legendHigh.textContent = "high";
@@ -3228,7 +3242,7 @@ const APPLET_HTML = raw"""
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(`visual:fps=${fps}&speed=${speed}&activity_scale=${activityScale}`);
         const scaleText = activityScale === "simulation" ? "simulation min/max" : "frame min/max";
-        els.status.textContent = `Updated visualization: target ${fps} fps, target speed ${formatSpeed(speed)}, activity scale ${scaleText}. Simulation state preserved.`;
+        els.status.textContent = `Updated visualization: stream ${fps} fps, simulation speed ${formatSpeed(speed)}, activity scale ${scaleText}. Simulation state preserved.`;
       }
     }
 
@@ -3281,13 +3295,13 @@ const APPLET_HTML = raw"""
             duty: msg.dutyCycle === null ? Number(els.duty.value) || 50 : Number(msg.dutyCycle)
           };
           drawStimulusGraph(0);
-          const speedText = msg.speed === 0 ? "max speed" : `${formatSpeed(msg.speed)} speed`;
+          const speedText = msg.speed === 0 ? "max" : formatSpeed(msg.speed);
           if (msg.activityScale) els.activityScale.value = msg.activityScale;
           const scaleText = msg.activityScale === "simulation" ? "simulation min/max" : "frame min/max";
           const geometryText = msg.fieldGeometry === "double_sech" ? `, double-sech V1 density ${msg.fieldDensity}` : "";
           const boundaryText = msg.boundaryX === msg.boundaryY ? `boundary:${msg.boundaryX}` : `x:${msg.boundaryX} y:${msg.boundaryY}`;
           const reflectText = (msg.boundaryX === "partial_reflect" || msg.boundaryY === "partial_reflect") ? ` reflect=${msg.partialReflectStrength}` : "";
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, \u03c3\u2091=${msg.Se}, \u03c3\u1d62=${msg.Si}, dt=${msg.dt} ms, target ${msg.fps} fps, target ${speedText}, ${scaleText}, ${duty}${coupling}.`;
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, \u03c3\u2091=${msg.Se}, \u03c3\u1d62=${msg.Si}, dt=${msg.dt} ms, stream ${msg.fps} fps, simulation speed ${speedText}, ${scaleText}, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {
@@ -3334,6 +3348,7 @@ const APPLET_HTML = raw"""
         els.simTime.textContent = formatSimTime(msg.t);
         els.streamFps.textContent = observedFps.toFixed(1);
         els.msStep.textContent = msg.msPerStep.toFixed(3);
+        els.skipInterval.textContent = String(msg.skipInterval ?? Math.max(0, (msg.stepsPerFrame || 1) - 1));
         els.rtx.textContent = actualRealtimeX.toFixed(2);
         els.legendLow.textContent = msg.min.toFixed(3);
         els.legendHigh.textContent = msg.max.toFixed(3);
