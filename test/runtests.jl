@@ -581,6 +581,8 @@ end
         @test occursin("id=\"colorMap\"", body)
         @test occursin("id=\"activityScale\"", body)
         @test occursin("id=\"frameSelect\"", body)
+        @test occursin("E + I", body)
+        @test occursin("pointwise E + I", body)
         @test occursin("id=\"fieldGraph\"", body)
         @test occursin("id=\"fieldInfo\"", body)
         @test occursin("value=\"phase\"", body)

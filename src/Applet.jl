@@ -2481,8 +2481,9 @@ const APPLET_HTML = raw"""
       for (let x = -maxRadius; x <= maxRadius; x++) {
         const e = gaussian1dValue(x, se);
         const i = gaussian1dValue(x, si);
-        samples.push({ x, e, i });
-        maxValue = Math.max(maxValue, e, i);
+        const sum = e + i;
+        samples.push({ x, e, i, sum });
+        maxValue = Math.max(maxValue, e, i, sum);
       }
 
       const ctx = canvas.getContext("2d");
@@ -2548,6 +2549,7 @@ const APPLET_HTML = raw"""
 
       drawLine("i", "#f3b33d");
       drawLine("e", "#009eaa");
+      drawLine("sum", "#0b3146");
       ctx.fillStyle = "#607284";
       ctx.font = `${11 * dpr}px IBM Plex Sans, sans-serif`;
       ctx.textAlign = "left";
@@ -2561,8 +2563,10 @@ const APPLET_HTML = raw"""
       ctx.fillText(`\u03c3\u2091, r=${radiusE}`, padL + 8 * dpr, padT + 14 * dpr);
       ctx.fillStyle = "#f3b33d";
       ctx.fillText(`\u03c3\u1d62, r=${radiusI}`, padL + 110 * dpr, padT + 14 * dpr);
+      ctx.fillStyle = "#0b3146";
+      ctx.fillText(`E + I`, padL + 212 * dpr, padT + 14 * dpr);
       els.kernelInfo.textContent =
-        `r_e=ceil(${cutoff} x ${se})=${radiusE}; r_i=ceil(${cutoff} x ${si})=${radiusI}; mass ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%`;
+        `r_e=ceil(${cutoff} x ${se})=${radiusE}; r_i=ceil(${cutoff} x ${si})=${radiusI}; mass ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%; dark curve is pointwise E + I`;
     }
 
     function drawRetinal(canvas, values, rows, cols) {
