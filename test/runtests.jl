@@ -487,7 +487,8 @@ end
     @test RSEModel._steps_per_frame(30, 1.0, p) == 167
     @test RSEModel._steps_per_frame(30, 0.1, p) == 17
     @test RSEModel._steps_per_frame(30, 0.01, p) == 2
-    @test RSEModel._steps_per_frame(30, 0.0, p) == 167
+    @test RSEModel._steps_per_frame(30, 0.006, p) == 1
+    @test RSEModel._steps_per_frame(30, 0.0, p) == 1
 
     scale_runtime = RSEModel.LiveRuntime(activity_scale=:simulation)
     first_frame = RSEModel._make_live_frame(
@@ -512,7 +513,7 @@ end
     )
     @test first_frame.lo == 1.0f0
     @test first_frame.hi == 4.0f0
-    @test first_frame.skip_interval == 0
+    @test first_frame.steps_per_frame == 1
     @test second_frame.lo == 1.0f0
     @test second_frame.hi == 6.0f0
 
@@ -568,10 +569,10 @@ end
         @test occursin("Period (ms)", body)
         @test occursin("Duty cycle (%)", body)
         @test occursin("Stream FPS", body)
-        @test occursin("Skip interval", body)
+        @test occursin("Step interval", body)
         @test occursin("Max speed", body)
         @test occursin("id=\"maxSpeed\"", body)
-        @test occursin("id=\"skipInterval\"", body)
+        @test occursin("id=\"stepInterval\"", body)
         @test occursin("&sigma;<sub>e</sub>", body)
         @test occursin("id=\"dt\"", body)
         @test occursin("value=\"no_connection\"", body)
@@ -605,14 +606,23 @@ end
         @test occursin("id=\"nControl\"", body)
         @test occursin("id=\"legendLow\"", body)
         @test occursin("id=\"legendHigh\"", body)
+        @test occursin("visual-field-wrap", body)
+        @test occursin("plot-title", body)
+        @test !occursin("legend-label", body)
         @test occursin("id=\"boundaryControl\"", body)
         @test occursin("id=\"boundaryXControl\"", body)
         @test occursin("id=\"partialReflectControl\"", body)
         @test occursin("id=\"partialReflectStrength\"", body)
         @test occursin("Selected Parameters", body)
         @test occursin("data-preset=\"p1\"", body)
+        @test occursin("<strong>Dots</strong>", body)
+        @test occursin("<strong>Zig-zag</strong>", body)
+        @test !occursin("Boundary periodic, coupling none", body)
+        @test !occursin("N64 A0.2 T55", body)
         @test occursin("id=\"printParams\"", body)
         @test occursin("id=\"paramOutput\"", body)
+        @test !occursin("stream query:", body)
+        @test !occursin("stream path:", body)
         @test occursin("value=\"double_sech\"", body)
         @test occursin("value=\"partial_reflect\"", body)
         @test occursin("function formatSimTime", body)
@@ -630,6 +640,9 @@ end
         @test occursin("event.code === \"Enter\"", body)
         @test !occursin("id=\"dtMetric\"", body)
         @test !occursin("id=\"gridN\"", body)
+        @test !occursin("id=\"msStep\"", body)
+        @test !occursin("ms / step", body)
+        @test !occursin("id=\"skipInterval\"", body)
 
         address = "127.0.0.1:$(HTTP.port(server))"
         HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1&activity_scale=simulation") do ws
@@ -648,7 +661,8 @@ end
             @test occursin("\"phaseCount\":1250", frame)
             @test occursin("\"phaseEData\":", frame)
             @test occursin("\"phaseIData\":", frame)
-            @test occursin("\"skipInterval\":999", frame)
+            @test occursin("\"stepInterval\":1", frame)
+            @test !occursin("\"skipInterval\"", frame)
         end
     finally
         close(server)
