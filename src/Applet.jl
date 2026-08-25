@@ -1288,23 +1288,23 @@ const APPLET_HTML = raw"""
     main {
       width: min(1440px, 100%);
       margin: 0 auto;
-      padding: 22px;
+      padding: 18px;
       display: grid;
-      grid-template-columns: 318px 1fr;
+      grid-template-columns: 304px 1fr;
       gap: 18px;
     }
 
     h1 {
-      margin: 0 0 8px;
-      font-size: clamp(24px, 2.7vw, 38px);
+      margin: 0 0 6px;
+      font-size: clamp(21px, 2.12vw, 29px);
       letter-spacing: -0.06em;
-      line-height: 0.95;
+      line-height: 0.9;
       color: #092337;
     }
 
     h2 {
       margin: 0;
-      font-size: 13px;
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.18em;
       color: var(--accent);
@@ -1319,23 +1319,38 @@ const APPLET_HTML = raw"""
     }
 
     .panel {
-      padding: 16px;
+      padding: 14px;
       align-self: start;
       position: sticky;
-      top: 18px;
+      top: 10px;
+      max-height: calc(100vh - 20px);
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+      overscroll-behavior: contain;
+    }
+
+    .panel::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .panel::-webkit-scrollbar-thumb {
+      background: rgba(96, 114, 132, 0.22);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: content-box;
     }
 
     .subtitle {
       color: var(--muted);
-      margin: 0 0 12px;
+      margin: 0 0 10px;
       line-height: 1.3;
-      font-size: 12px;
+      font-size: 11px;
     }
 
     .key-hints {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
     }
 
@@ -1343,12 +1358,12 @@ const APPLET_HTML = raw"""
       display: inline-flex;
       align-items: center;
       min-height: 20px;
-      padding: 2px 7px;
+      padding: 2px 6px;
       border: 1px solid var(--line-strong);
       border-radius: 8px;
       background: #ffffff;
       color: var(--ink);
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 800;
       letter-spacing: 0.06em;
       text-transform: uppercase;
@@ -1356,43 +1371,121 @@ const APPLET_HTML = raw"""
     }
 
     .control-section {
-      margin-top: 9px;
-      padding: 9px;
+      margin-top: 6px;
+      padding: 8px;
       border: 1px solid rgba(198, 216, 226, 0.78);
-      border-radius: 16px;
-      background: rgba(255, 255, 255, 0.55);
+      border-radius: 15px;
+      background:
+        radial-gradient(circle at 96% 0%, rgba(0, 158, 170, 0.08), transparent 5rem),
+        rgba(255, 255, 255, 0.58);
+    }
+
+    .control-section.featured {
+      background:
+        radial-gradient(circle at 0% 0%, rgba(243, 179, 61, 0.12), transparent 5rem),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(247, 252, 253, 0.58));
     }
 
     .section-title {
-      margin-bottom: 7px;
+      margin-bottom: 6px;
       color: #0b3146;
-      font-size: 10px;
+      font-size: 9.5px;
       font-weight: 900;
       letter-spacing: 0.14em;
       text-transform: uppercase;
     }
 
+    .subsection-title {
+      margin: 8px 0 5px;
+      color: var(--accent);
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    .subsection-title:first-child {
+      margin-top: 0;
+    }
+
     .control-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 7px;
+      gap: 6px;
+    }
+
+    .control-grid.triad {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .control-grid.triad .span-2 {
+      grid-column: span 2;
+    }
+
+    .control-grid.triad .wide {
+      grid-column: 1 / -1;
+    }
+
+    details.control-section {
+      padding: 0;
+      overflow: hidden;
+    }
+
+    details.control-section > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 0;
+      padding: 8px 10px;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+
+    details.control-section > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.control-section > summary::after {
+      content: "+";
+      display: grid;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: rgba(0, 158, 170, 0.12);
+      color: var(--accent);
+      font-size: 13px;
+      line-height: 1;
+      transition: transform 160ms ease, background 160ms ease;
+    }
+
+    details.control-section[open] > summary::after {
+      content: "-";
+      background: rgba(243, 179, 61, 0.18);
+      color: #8a6408;
+    }
+
+    .control-section-body {
+      padding: 0 8px 8px;
     }
 
     .preset-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 6px;
+      gap: 5px;
     }
 
     .preset-button {
-      min-height: 34px;
-      padding: 7px 8px;
+      min-height: 30px;
+      padding: 6px 7px;
       color: #0b3146;
       background:
         radial-gradient(circle at 95% 5%, rgba(0, 158, 170, 0.13), transparent 4rem),
         #ffffff;
       border: 1px solid var(--line);
-      border-radius: 14px;
+      border-radius: 12px;
       text-align: center;
       box-shadow: none;
     }
@@ -1400,7 +1493,7 @@ const APPLET_HTML = raw"""
     .preset-button strong {
       display: block;
       margin-bottom: 0;
-      font-size: 11px;
+      font-size: 10px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
@@ -1413,8 +1506,8 @@ const APPLET_HTML = raw"""
     }
 
     .param-output {
-      margin: 8px 0 0;
-      max-height: 128px;
+      margin: 7px 0 0;
+      max-height: 108px;
       overflow: auto;
       white-space: pre-wrap;
       word-break: break-word;
@@ -1422,7 +1515,7 @@ const APPLET_HTML = raw"""
       border-radius: 14px;
       background: #071824;
       color: #dff8f8;
-      padding: 8px;
+      padding: 7px;
       font: 10px/1.35 "IBM Plex Mono", "SFMono-Regular", monospace;
     }
 
@@ -1436,9 +1529,9 @@ const APPLET_HTML = raw"""
 
     label {
       display: grid;
-      gap: 4px;
+      gap: 3px;
       color: var(--muted);
-      font-size: 10.5px;
+      font-size: 10px;
       letter-spacing: 0.04em;
     }
 
@@ -1451,10 +1544,10 @@ const APPLET_HTML = raw"""
     input, select, button {
       width: 100%;
       border: 1px solid var(--line-strong);
-      border-radius: 12px;
+      border-radius: 11px;
       color: var(--ink);
       background: rgba(255, 255, 255, 0.74);
-      padding: 7px 9px;
+      padding: 6px 8px;
       font: inherit;
       outline: none;
     }
@@ -1467,16 +1560,16 @@ const APPLET_HTML = raw"""
     .check-row {
       display: flex;
       align-items: center;
-      gap: 9px;
-      padding: 5px 0 0;
+      gap: 7px;
+      padding: 4px 0 0;
       color: var(--ink);
     }
 
     .button-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin-top: 10px;
+      gap: 8px;
+      margin-top: 6px;
     }
 
     button {
@@ -1504,7 +1597,7 @@ const APPLET_HTML = raw"""
     }
 
     .section-actions {
-      margin-top: 7px;
+      margin-top: 6px;
     }
 
     .status {
@@ -1945,61 +2038,29 @@ const APPLET_HTML = raw"""
       <h1>Real-time Strobe Hallucination Simulator</h1>
       <p class="subtitle key-hints"><span class="key">Space</span> pause/play <span class="key">Enter</span> reset/apply</p>
 
-      <div class="control-section">
+      <div class="control-section featured">
         <div class="section-title">Visualization</div>
         <div class="control-grid">
           <label>Stream FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
           <label>Speed x<input id="speed" type="number" min="0.006" max="10" step="0.001" value="1"></label>
-          <label id="maxSpeedControl" class="check-row"><input id="maxSpeed" type="checkbox"> Max speed</label>
-          <label class="wide">Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
-          <label class="wide">Activity scale<select id="activityScale"><option value="frame">frame min/max</option><option value="simulation">simulation min/max</option></select></label>
+          <label>Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
+          <label>Activity scale<select id="activityScale"><option value="frame">frame min/max</option><option value="simulation">simulation min/max</option></select></label>
+          <label id="maxSpeedControl" class="check-row wide"><input id="maxSpeed" type="checkbox"> Max speed</label>
         </div>
       </div>
 
-      <div class="control-section">
-        <div class="section-title">Backend Implementation</div>
-        <div class="control-grid">
-          <label>Backend<select id="backend"><option value="metal">GPU (Metal)</option><option value="cpu">CPU</option></select></label>
-          <label>Convolution<select id="conv"><option value="separable">separable</option><option value="fft">FFT</option></select></label>
-          <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
-          <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
-        </div>
-        <label id="fastNControl" class="check-row"><input id="fastN" type="checkbox" checked> Snap to FFT-friendly odd N</label>
-      </div>
-
-      <div class="control-section">
-        <div class="section-title">Boundary</div>
-        <div class="control-grid">
-          <label id="boundaryControl" class="hidden-control">Boundary<select id="boundary"><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
-          <label id="boundaryXControl">Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
-          <label id="boundaryYControl">Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
-          <label id="partialReflectControl" class="hidden-control">Reflect gain<input id="partialReflectStrength" type="number" min="0" max="1" step="0.05" value="0.5"></label>
-        </div>
-      </div>
-
-      <div class="control-section">
-        <div class="section-title">Coupling</div>
-        <div class="control-grid">
-          <label>Coupling<select id="coupling"><option value="off">none</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
-          <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
-          <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
-        </div>
-      </div>
-
-      <div class="control-section">
-        <div class="section-title">Strobe Parameters</div>
-        <div class="control-grid">
+      <div class="control-section featured">
+        <div class="section-title">Model Parameters</div>
+        <div class="subsection-title">Strobe</div>
+        <div class="control-grid triad">
           <label>Amplitude<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
           <label>Period (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
           <label>Duty cycle (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
         </div>
-      </div>
-
-      <div class="control-section">
-        <div class="section-title">Neural Field Parameters</div>
-        <div class="control-grid">
-          <label class="wide">Field geometry<select id="fieldGeometry"><option value="square">square</option><option value="double_sech">double-sech V1</option></select></label>
-          <label id="fieldDensityControl" class="hidden-control">Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
+        <div class="subsection-title">Neural Field</div>
+        <div class="control-grid triad">
+          <label class="span-2">Field geometry<select id="fieldGeometry"><option value="square">square</option><option value="double_sech">double-sech V1</option></select></label>
+          <label id="fieldDensityControl" class="hidden-control span-2">Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
           <label id="nControl">N<input id="n" type="number" min="5" step="2" value="81"></label>
           <label><span>&sigma;<sub>e</sub></span><input id="se" type="number" min="0.1" step="0.05" value="2"></label>
           <label><span>&sigma;<sub>i</sub></span><input id="si" type="number" min="0.1" step="0.05" value="5"></label>
@@ -2007,20 +2068,58 @@ const APPLET_HTML = raw"""
         </div>
       </div>
 
-      <div class="control-section">
-        <div class="section-title">Selected Parameters</div>
-        <div class="preset-grid">
-          <button class="preset-button" data-preset="default"><strong>Dots</strong><span>Default parameter set</span></button>
-          <button class="preset-button" data-preset="p1"><strong>Zig-zag</strong><span>Zig-zag square grid</span></button>
-          <button class="preset-button" data-preset="p2"><strong>Square</strong><span>Square grid</span></button>
-          <button class="preset-button" data-preset="p3"><strong>Lines + dots</strong><span>Lines and dots</span></button>
-          <button class="preset-button" data-preset="p4"><strong>Hex rings</strong><span>Hex grid rings</span></button>
+      <details class="control-section">
+        <summary class="section-title">Backend Implementation</summary>
+        <div class="control-section-body">
+          <div class="control-grid">
+            <label>Backend<select id="backend"><option value="metal">GPU (Metal)</option><option value="cpu">CPU</option></select></label>
+            <label>Convolution<select id="conv"><option value="separable">separable</option><option value="fft">FFT</option></select></label>
+            <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
+            <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
+          </div>
+          <label id="fastNControl" class="check-row"><input id="fastN" type="checkbox" checked> Snap to FFT-friendly odd N</label>
         </div>
-        <div class="section-actions">
-          <button id="printParams" class="secondary">Print parameters</button>
+      </details>
+
+      <details class="control-section">
+        <summary class="section-title">Boundary</summary>
+        <div class="control-section-body">
+          <div class="control-grid">
+            <label id="boundaryControl" class="hidden-control">Boundary<select id="boundary"><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
+            <label id="boundaryXControl">Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
+            <label id="boundaryYControl">Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
+            <label id="partialReflectControl" class="hidden-control">Reflect gain<input id="partialReflectStrength" type="number" min="0" max="1" step="0.05" value="0.5"></label>
+          </div>
         </div>
-        <pre id="paramOutput" class="param-output">Click Print parameters to write the simulation settings here.</pre>
-      </div>
+      </details>
+
+      <details class="control-section">
+        <summary class="section-title">Coupling</summary>
+        <div class="control-section-body">
+          <div class="control-grid">
+            <label>Coupling<select id="coupling"><option value="off">none</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
+            <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
+            <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
+          </div>
+        </div>
+      </details>
+
+      <details class="control-section">
+        <summary class="section-title">Selected Parameters</summary>
+        <div class="control-section-body">
+          <div class="preset-grid">
+            <button class="preset-button" data-preset="default"><strong>Dots</strong><span>Default parameter set</span></button>
+            <button class="preset-button" data-preset="p1"><strong>Zig-zag</strong><span>Zig-zag square grid</span></button>
+            <button class="preset-button" data-preset="p2"><strong>Square</strong><span>Square grid</span></button>
+            <button class="preset-button" data-preset="p3"><strong>Lines + dots</strong><span>Lines and dots</span></button>
+            <button class="preset-button" data-preset="p4"><strong>Hex rings</strong><span>Hex grid rings</span></button>
+          </div>
+          <div class="section-actions">
+            <button id="printParams" class="secondary">Print parameters</button>
+          </div>
+          <pre id="paramOutput" class="param-output">Click Print parameters to write the simulation settings here.</pre>
+        </div>
+      </details>
       <div class="button-row">
         <button id="pausePlay" class="pause">Pause</button>
         <button id="reset" class="secondary">Reset</button>
