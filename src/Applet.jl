@@ -1267,7 +1267,19 @@ const APPLET_HTML = raw"""
       --shadow: 0 24px 70px rgba(25, 56, 82, 0.13);
       --soft-shadow: 0 14px 38px rgba(25, 56, 82, 0.08);
       --legend-gradient: linear-gradient(0deg, #0d0887, #5403a0, #8b0aa5, #b93289, #db5c68, #f48849, #feba2c, #f0f921);
-      font-family: "IBM Plex Sans", "Aptos", "Helvetica Neue", sans-serif;
+      --font-ui: "IBM Plex Sans", "Aptos", "Helvetica Neue", sans-serif;
+      --font-mono: "IBM Plex Mono", "SFMono-Regular", monospace;
+      --text-title: clamp(21px, 2.12vw, 29px);
+      --text-section: 11px;
+      --text-subsection: 10px;
+      --text-label: 10px;
+      --text-note: 12px;
+      --text-plot-title: 16px;
+      --text-plot-label: 10px;
+      --weight-normal: 500;
+      --weight-semibold: 700;
+      --weight-bold: 800;
+      font-family: var(--font-ui);
     }
 
     * { box-sizing: border-box; }
@@ -1288,25 +1300,25 @@ const APPLET_HTML = raw"""
     main {
       width: min(1440px, 100%);
       margin: 0 auto;
-      padding: 18px;
+      padding: 14px;
       display: grid;
       grid-template-columns: 304px 1fr;
-      gap: 18px;
+      gap: 16px;
     }
 
     h1 {
       margin: 0 0 6px;
-      font-size: clamp(21px, 2.12vw, 29px);
+      font-size: var(--text-title);
       letter-spacing: -0.06em;
       line-height: 0.9;
       color: #092337;
     }
 
     h2 {
-      margin: 0;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.18em;
+      margin: 0 0 3px;
+      font-size: var(--text-note);
+      font-weight: var(--weight-semibold);
+      letter-spacing: 0.01em;
       color: var(--accent);
     }
 
@@ -1319,11 +1331,11 @@ const APPLET_HTML = raw"""
     }
 
     .panel {
-      padding: 14px;
+      padding: 12px;
       align-self: start;
       position: sticky;
-      top: 10px;
-      max-height: calc(100vh - 20px);
+      top: 8px;
+      max-height: calc(100vh - 16px);
       overflow-y: auto;
       scrollbar-gutter: stable;
       overscroll-behavior: contain;
@@ -1342,7 +1354,7 @@ const APPLET_HTML = raw"""
 
     .subtitle {
       color: var(--muted);
-      margin: 0 0 10px;
+      margin: 0 0 8px;
       line-height: 1.3;
       font-size: 11px;
     }
@@ -1357,22 +1369,22 @@ const APPLET_HTML = raw"""
     .key {
       display: inline-flex;
       align-items: center;
-      min-height: 20px;
-      padding: 2px 6px;
+      min-height: 18px;
+      padding: 1px 6px;
       border: 1px solid var(--line-strong);
       border-radius: 8px;
       background: #ffffff;
       color: var(--ink);
       font-size: 10px;
-      font-weight: 800;
+      font-weight: var(--weight-bold);
       letter-spacing: 0.06em;
       text-transform: uppercase;
       box-shadow: var(--soft-shadow);
     }
 
     .control-section {
-      margin-top: 6px;
-      padding: 8px;
+      margin-top: 5px;
+      padding: 7px;
       border: 1px solid rgba(198, 216, 226, 0.78);
       border-radius: 15px;
       background:
@@ -1387,21 +1399,19 @@ const APPLET_HTML = raw"""
     }
 
     .section-title {
-      margin-bottom: 6px;
+      margin-bottom: 5px;
       color: #0b3146;
-      font-size: 9.5px;
-      font-weight: 900;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
+      font-size: var(--text-section);
+      font-weight: var(--weight-bold);
+      letter-spacing: 0.01em;
     }
 
     .subsection-title {
-      margin: 8px 0 5px;
+      margin: 7px 0 4px;
       color: var(--accent);
-      font-size: 9px;
-      font-weight: 900;
-      letter-spacing: 0.13em;
-      text-transform: uppercase;
+      font-size: var(--text-subsection);
+      font-weight: var(--weight-bold);
+      letter-spacing: 0.01em;
     }
 
     .subsection-title:first-child {
@@ -1411,7 +1421,7 @@ const APPLET_HTML = raw"""
     .control-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 6px;
+      gap: 5px;
     }
 
     .control-grid.triad {
@@ -1437,7 +1447,7 @@ const APPLET_HTML = raw"""
       justify-content: space-between;
       gap: 8px;
       margin: 0;
-      padding: 8px 10px;
+      padding: 7px 9px;
       cursor: pointer;
       list-style: none;
       user-select: none;
@@ -1451,8 +1461,8 @@ const APPLET_HTML = raw"""
       content: "+";
       display: grid;
       place-items: center;
-      width: 18px;
-      height: 18px;
+      width: 16px;
+      height: 16px;
       border-radius: 999px;
       background: rgba(0, 158, 170, 0.12);
       color: var(--accent);
@@ -1468,18 +1478,18 @@ const APPLET_HTML = raw"""
     }
 
     .control-section-body {
-      padding: 0 8px 8px;
+      padding: 0 7px 7px;
     }
 
     .preset-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 5px;
+      gap: 4px;
     }
 
     .preset-button {
-      min-height: 30px;
-      padding: 6px 7px;
+      min-height: 28px;
+      padding: 5px 7px;
       color: #0b3146;
       background:
         radial-gradient(circle at 95% 5%, rgba(0, 158, 170, 0.13), transparent 4rem),
@@ -1493,9 +1503,8 @@ const APPLET_HTML = raw"""
     .preset-button strong {
       display: block;
       margin-bottom: 0;
-      font-size: 10px;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
+      font-size: var(--text-label);
+      letter-spacing: 0.01em;
     }
 
     .preset-button span {
@@ -1516,7 +1525,7 @@ const APPLET_HTML = raw"""
       background: #071824;
       color: #dff8f8;
       padding: 7px;
-      font: 10px/1.35 "IBM Plex Mono", "SFMono-Regular", monospace;
+      font: 10px/1.35 var(--font-mono);
     }
 
     .wide {
@@ -1529,10 +1538,11 @@ const APPLET_HTML = raw"""
 
     label {
       display: grid;
-      gap: 3px;
+      gap: 2px;
       color: var(--muted);
-      font-size: 10px;
-      letter-spacing: 0.04em;
+      font-size: var(--text-label);
+      font-weight: var(--weight-normal);
+      letter-spacing: 0.01em;
     }
 
     label sub {
@@ -1547,8 +1557,9 @@ const APPLET_HTML = raw"""
       border-radius: 11px;
       color: var(--ink);
       background: rgba(255, 255, 255, 0.74);
-      padding: 6px 8px;
+      padding: 5px 7px;
       font: inherit;
+      font-size: var(--text-label);
       outline: none;
     }
 
@@ -1568,8 +1579,8 @@ const APPLET_HTML = raw"""
     .button-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      margin-top: 6px;
+      gap: 6px;
+      margin-top: 5px;
     }
 
     button {
@@ -1577,7 +1588,8 @@ const APPLET_HTML = raw"""
       background: linear-gradient(135deg, #0b3146, #006f7c);
       color: white;
       border: 0;
-      font-weight: 800;
+      font-size: 12px;
+      font-weight: var(--weight-bold);
       letter-spacing: 0.02em;
     }
 
@@ -1597,7 +1609,7 @@ const APPLET_HTML = raw"""
     }
 
     .section-actions {
-      margin-top: 6px;
+      margin-top: 5px;
     }
 
     .status {
@@ -1607,7 +1619,7 @@ const APPLET_HTML = raw"""
       background: #f7fbfc;
       border: 1px solid var(--line);
       color: var(--muted);
-      font-size: 13px;
+      font-size: var(--text-note);
       min-height: 44px;
     }
 
@@ -1644,9 +1656,8 @@ const APPLET_HTML = raw"""
 
     .metric span {
       color: var(--muted);
-      font-size: 8.5px;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
+      font-size: 9px;
+      letter-spacing: 0.02em;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1688,16 +1699,16 @@ const APPLET_HTML = raw"""
     }
 
     .view-title {
-      font-size: 16px;
-      font-weight: 800;
+      font-size: var(--text-plot-title);
+      font-weight: var(--weight-bold);
       letter-spacing: 0.02em;
     }
 
     .plot-title {
       text-align: center;
-      font-size: 16px;
-      font-weight: 900;
-      letter-spacing: 0.04em;
+      font-size: var(--text-plot-title);
+      font-weight: var(--weight-bold);
+      letter-spacing: 0.01em;
       color: #0b3146;
     }
 
@@ -1750,12 +1761,11 @@ const APPLET_HTML = raw"""
       position: absolute;
       z-index: 2;
       color: #33495c;
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 0.04em;
+      font-size: var(--text-plot-label);
+      font-weight: var(--weight-semibold);
+      letter-spacing: 0.01em;
       line-height: 1;
       pointer-events: none;
-      text-transform: uppercase;
     }
 
     .axis-label {
@@ -1770,13 +1780,13 @@ const APPLET_HTML = raw"""
     .hemi-label {
       color: #0b3146;
       font-size: 11px;
-      letter-spacing: 0.07em;
+      font-weight: var(--weight-bold);
+      letter-spacing: 0.01em;
     }
 
     .ecc-label {
       color: #607284;
-      font-size: 10px;
-      text-transform: none;
+      font-size: var(--text-plot-label);
       letter-spacing: 0.01em;
     }
 
@@ -1975,14 +1985,14 @@ const APPLET_HTML = raw"""
       align-items: center;
       gap: 7px;
       color: var(--muted);
-      font-size: 11px;
+      font-size: var(--text-label);
       letter-spacing: 0.03em;
     }
 
     .tiny-note {
       margin-top: 8px;
       color: var(--muted);
-      font-size: 11px;
+      font-size: var(--text-label);
       line-height: 1.35;
     }
 
@@ -2034,7 +2044,7 @@ const APPLET_HTML = raw"""
 <body>
   <main>
     <section class="panel">
-      <h2>Rule-Ermentrout-Stroffegen</h2>
+      <h2>Rule-Ermentrout-Stroffegen model</h2>
       <h1>Real-time Strobe Hallucination Simulator</h1>
       <p class="subtitle key-hints"><span class="key">Space</span> pause/play <span class="key">Enter</span> reset/apply</p>
 
@@ -2042,7 +2052,7 @@ const APPLET_HTML = raw"""
         <div class="section-title">Visualization</div>
         <div class="control-grid">
           <label>Stream FPS<input id="fps" type="number" min="1" max="60" step="1" value="30"></label>
-          <label>Speed x<input id="speed" type="number" min="0.006" max="10" step="0.001" value="1"></label>
+          <label>Speed (x)<input id="speed" type="number" min="0.006" max="10" step="0.001" value="1"></label>
           <label>Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
           <label>Activity scale<select id="activityScale"><option value="frame">frame min/max</option><option value="simulation">simulation min/max</option></select></label>
           <label id="maxSpeedControl" class="check-row wide"><input id="maxSpeed" type="checkbox"> Max speed</label>
@@ -2057,27 +2067,27 @@ const APPLET_HTML = raw"""
           <label>Period (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
           <label>Duty cycle (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
         </div>
-        <div class="subsection-title">Neural Field</div>
+        <div class="subsection-title">Neural field</div>
         <div class="control-grid triad">
-          <label class="span-2">Field geometry<select id="fieldGeometry"><option value="square">square</option><option value="double_sech">double-sech V1</option></select></label>
+          <label class="span-2">Field geometry<select id="fieldGeometry"><option value="square">Square</option><option value="double_sech">Double-sech V1</option></select></label>
           <label id="fieldDensityControl" class="hidden-control span-2">Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
-          <label id="nControl">N<input id="n" type="number" min="5" step="2" value="81"></label>
+          <label id="nControl">Sheet size<input id="n" type="number" min="5" step="2" value="81"></label>
           <label><span>&sigma;<sub>e</sub></span><input id="se" type="number" min="0.1" step="0.05" value="2"></label>
           <label><span>&sigma;<sub>i</sub></span><input id="si" type="number" min="0.1" step="0.05" value="5"></label>
-          <label>dt (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
+          <label>Time step (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
         </div>
       </div>
 
       <details class="control-section">
-        <summary class="section-title">Backend Implementation</summary>
+        <summary class="section-title">Implementation</summary>
         <div class="control-section-body">
           <div class="control-grid">
             <label>Backend<select id="backend"><option value="metal">GPU (Metal)</option><option value="cpu">CPU</option></select></label>
-            <label>Convolution<select id="conv"><option value="separable">separable</option><option value="fft">FFT</option></select></label>
+            <label>Convolution<select id="conv"><option value="separable">Separable</option><option value="fft">FFT</option></select></label>
             <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
             <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
           </div>
-          <label id="fastNControl" class="check-row"><input id="fastN" type="checkbox" checked> Snap to FFT-friendly odd N</label>
+          <label id="fastNControl" class="check-row"><input id="fastN" type="checkbox" checked> Use FFT-friendly odd sheet size</label>
         </div>
       </details>
 
@@ -2085,9 +2095,9 @@ const APPLET_HTML = raw"""
         <summary class="section-title">Boundary</summary>
         <div class="control-section-body">
           <div class="control-grid">
-            <label id="boundaryControl" class="hidden-control">Boundary<select id="boundary"><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
-            <label id="boundaryXControl">Boundary X<select id="boundaryX"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
-            <label id="boundaryYControl">Boundary Y<select id="boundaryY"><option value="periodic">periodic</option><option value="edge">edge</option><option value="zero">zero</option><option value="partial_reflect">partial reflect</option></select></label>
+            <label id="boundaryControl" class="hidden-control">Boundary<select id="boundary"><option value="edge">Edge</option><option value="zero">Zero</option><option value="partial_reflect">Partial reflect</option></select></label>
+            <label id="boundaryXControl">Boundary x<select id="boundaryX"><option value="periodic">Periodic</option><option value="edge">Edge</option><option value="zero">Zero</option><option value="partial_reflect">Partial reflect</option></select></label>
+            <label id="boundaryYControl">Boundary y<select id="boundaryY"><option value="periodic">Periodic</option><option value="edge">Edge</option><option value="zero">Zero</option><option value="partial_reflect">Partial reflect</option></select></label>
             <label id="partialReflectControl" class="hidden-control">Reflect gain<input id="partialReflectStrength" type="number" min="0" max="1" step="0.05" value="0.5"></label>
           </div>
         </div>
@@ -2097,15 +2107,15 @@ const APPLET_HTML = raw"""
         <summary class="section-title">Coupling</summary>
         <div class="control-section-body">
           <div class="control-grid">
-            <label>Coupling<select id="coupling"><option value="off">none</option><option value="no_connection">no connection</option><option value="overlap">overlap</option></select></label>
+            <label>Coupling<select id="coupling"><option value="off">None</option><option value="no_connection">No connection</option><option value="overlap">Overlap</option></select></label>
             <label>Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
-            <label>Coupling g<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
+            <label>Coupling gain<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
           </div>
         </div>
       </details>
 
       <details class="control-section">
-        <summary class="section-title">Selected Parameters</summary>
+        <summary class="section-title">Parameter Presets</summary>
         <div class="control-section-body">
           <div class="preset-grid">
             <button class="preset-button" data-preset="default"><strong>Dots</strong><span>Default parameter set</span></button>
@@ -2115,9 +2125,9 @@ const APPLET_HTML = raw"""
             <button class="preset-button" data-preset="p4"><strong>Hex rings</strong><span>Hex grid rings</span></button>
           </div>
           <div class="section-actions">
-            <button id="printParams" class="secondary">Print parameters</button>
+            <button id="printParams" class="secondary">Print settings</button>
           </div>
-          <pre id="paramOutput" class="param-output">Click Print parameters to write the simulation settings here.</pre>
+          <pre id="paramOutput" class="param-output">Click Print settings to write the simulation settings here.</pre>
         </div>
       </details>
       <div class="button-row">
@@ -2128,14 +2138,14 @@ const APPLET_HTML = raw"""
 
     <section class="stage">
       <div class="metrics">
-        <div class="metric"><span>Sim time</span><strong id="simTime">0 ms</strong></div>
+        <div class="metric"><span>Simulation time</span><strong id="simTime">0 ms</strong></div>
         <div class="metric"><span>Stream FPS</span><strong id="streamFps">0</strong></div>
         <div class="metric"><span>Step interval</span><strong id="stepInterval">1</strong></div>
-        <div class="metric"><span>Real-time x</span><strong id="rtx">0</strong></div>
+        <div class="metric"><span>Real-time (x)</span><strong id="rtx">0</strong></div>
       </div>
       <div class="views">
         <div class="view">
-          <div class="plot-title">Cortical sheet</div>
+          <div class="plot-title">Cortical Sheet</div>
           <div id="corticalFrame" class="canvas-frame cortical-frame">
             <canvas id="cortical"></canvas>
             <span id="hemiLeft" class="hemi-label hemi-left">Cortical sheet</span>
@@ -2151,7 +2161,7 @@ const APPLET_HTML = raw"""
           </div>
         </div>
         <div class="view">
-          <div class="plot-title">Visual field</div>
+          <div class="plot-title">Visual Field</div>
           <div class="visual-field-wrap">
             <div class="canvas-frame retinal-frame">
               <canvas id="retinal"></canvas>
@@ -2170,7 +2180,7 @@ const APPLET_HTML = raw"""
       </div>
       <div class="frame-card">
         <div class="frame-toolbar">
-          <div class="view-title">Frames</div>
+          <div class="view-title">Analysis Panes</div>
           <select id="frameSelect">
             <option value="stimulus">Stimulus</option>
             <option value="kernel">Kernel</option>
@@ -2183,16 +2193,16 @@ const APPLET_HTML = raw"""
           <canvas id="stimulusGraph" class="stimulus-canvas"></canvas>
         </div>
         <div id="kernelPanel" class="frame-panel hidden-control" data-frame="kernel">
-          <div class="view-head"><div class="view-title">Kernel window</div><div class="view-note" id="kernelInfo">-</div></div>
+          <div class="view-head"><div class="view-title">Kernel</div><div class="view-note" id="kernelInfo">-</div></div>
           <canvas id="kernelGraph" class="kernel-canvas"></canvas>
           <div class="tiny-note">Cutoff is measured in sigma units: r<sub>e</sub> = ceil(cutoff x &sigma;<sub>e</sub>) and r<sub>i</sub> = ceil(cutoff x &sigma;<sub>i</sub>). The applet uses the separable product of the 1D kernels in x and y.</div>
         </div>
         <div id="fieldPanel" class="frame-panel hidden-control" data-frame="field">
-          <div class="view-head"><div class="view-title">Neural field</div><div class="view-note" id="fieldInfo">node lattice and retinal projection</div></div>
+          <div class="view-head"><div class="view-title">Neural Field</div><div class="view-note" id="fieldInfo">node lattice and retinal projection</div></div>
           <canvas id="fieldGraph" class="field-canvas"></canvas>
         </div>
         <div id="phasePanel" class="frame-panel hidden-control" data-frame="phase">
-          <div class="view-head"><div class="view-title">Phase plane</div><div class="view-note" id="phaseInfo">E/I firing-rate state cloud</div></div>
+          <div class="view-head"><div class="view-title">Phase Plane</div><div class="view-note" id="phaseInfo">E/I firing-rate state cloud</div></div>
           <div class="phase-options">
             <label><input id="phaseIncludeAverage" type="checkbox" checked> Include average</label>
           </div>
@@ -2703,7 +2713,7 @@ const APPLET_HTML = raw"""
       ctx.fillStyle = "#0b3146";
       ctx.fillText(`E - I`, padL + 222 * dpr, padT + 14 * dpr);
       els.kernelInfo.textContent =
-        `r_e=ceil(${cutoff} x ${se})=${radiusE}; r_i=ceil(${cutoff} x ${si})=${radiusI}; mass ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%; inhibitory is plotted negative, dark curve is pointwise E - I`;
+        `r_e=ceil(${cutoff} x ${se})=${radiusE}; r_i=ceil(${cutoff} x ${si})=${radiusI}; retained mass ${retainedE.toFixed(3)}% / ${retainedI.toFixed(3)}%; inhibitory curve is negative, dark curve is pointwise E - I`;
     }
 
     function drawRetinal(canvas, values, rows, cols) {
@@ -3249,7 +3259,7 @@ const APPLET_HTML = raw"""
         coupling: {
           mode: els.coupling.value,
           overlap_rows: Number(els.overlapRows.value) || 0,
-          g: Number(els.couplingStrength.value) || 0
+          gain: Number(els.couplingStrength.value) || 0
         },
         strobe: {
           amplitude: Number(els.amp.value) || 0,
@@ -3259,10 +3269,10 @@ const APPLET_HTML = raw"""
         neural_field: {
           geometry: els.fieldGeometry.value,
           density: els.fieldGeometry.value === "double_sech" ? Number(els.fieldDensity.value) || 1 : null,
-          N: els.fieldGeometry.value === "double_sech" ? null : Number(els.n.value) || 0,
+          sheet_size: els.fieldGeometry.value === "double_sech" ? null : Number(els.n.value) || 0,
           sigma_e: Number(els.se.value) || 0,
           sigma_i: Number(els.si.value) || 0,
-          dt_ms: Number(els.dt.value) || 0,
+          time_step_ms: Number(els.dt.value) || 0,
           kernel_cutoff: Number(els.kernelCutoff.value) || 3,
           seed: els.seed.value.trim() || null
         }
@@ -3408,7 +3418,7 @@ const APPLET_HTML = raw"""
         const msg = JSON.parse(event.data);
         if (msg.type === "hello") {
           const duty = msg.dutyCycle === null ? "default" : `${msg.dutyCycle.toFixed(1)}% duty`;
-          const coupling = msg.coupling === "overlap" ? `, overlap g=${msg.couplingStrength}` : (msg.coupling === "no_connection" || msg.fieldGeometry === "double_sech") ? ", two hemispheres no connection" : "";
+          const coupling = msg.coupling === "overlap" ? `, overlap gain ${msg.couplingStrength}` : (msg.coupling === "no_connection" || msg.fieldGeometry === "double_sech") ? ", two hemispheres with no connection" : "";
           if (msg.speed === 0) {
             els.maxSpeed.checked = true;
           } else {
@@ -3426,9 +3436,9 @@ const APPLET_HTML = raw"""
           if (msg.activityScale) els.activityScale.value = msg.activityScale;
           const scaleText = msg.activityScale === "simulation" ? "simulation min/max" : "frame min/max";
           const geometryText = msg.fieldGeometry === "double_sech" ? `, double-sech V1 density ${msg.fieldDensity}` : "";
-          const boundaryText = msg.boundaryX === msg.boundaryY ? `boundary:${msg.boundaryX}` : `x:${msg.boundaryX} y:${msg.boundaryY}`;
-          const reflectText = (msg.boundaryX === "partial_reflect" || msg.boundaryY === "partial_reflect") ? ` reflect=${msg.partialReflectStrength}` : "";
-          els.status.textContent = `Streaming ${msg.backend}/${msg.conv} ${boundaryText}${reflectText}${geometryText}, \u03c3\u2091=${msg.Se}, \u03c3\u1d62=${msg.Si}, dt=${msg.dt} ms, stream ${msg.fps} fps, simulation speed ${speedText}, ${scaleText}, ${duty}${coupling}.`;
+          const boundaryText = msg.boundaryX === msg.boundaryY ? `boundary ${msg.boundaryX}` : `boundary x ${msg.boundaryX}, y ${msg.boundaryY}`;
+          const reflectText = (msg.boundaryX === "partial_reflect" || msg.boundaryY === "partial_reflect") ? `, reflect gain ${msg.partialReflectStrength}` : "";
+          els.status.textContent = `Streaming ${msg.backend}/${msg.conv}, ${boundaryText}${reflectText}${geometryText}, \u03c3\u2091=${msg.Se}, \u03c3\u1d62=${msg.Si}, time step ${msg.dt} ms, stream ${msg.fps} fps, simulation speed ${speedText}, ${scaleText}, ${duty}${coupling}.`;
           return;
         }
         if (msg.type === "done") {
