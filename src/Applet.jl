@@ -12,6 +12,7 @@ Base.include_dependency(APPLET_JS_PATH)
 const APPLET_HTML = read(APPLET_HTML_PATH, String)
 const APPLET_CSS = read(APPLET_CSS_PATH, String)
 const APPLET_JS = read(APPLET_JS_PATH, String)
+const ACTIVITY_SCALE_WARMUP_MS = 500.0
 
 # Configuration and frame protocol
 
@@ -397,17 +398,18 @@ function _phase_bytes(
     return e_bytes, i_bytes
 end
 
-function _activity_scale_bounds!(runtime::Union{Nothing,LiveRuntime}, activity::AbstractMatrix)
+function _activity_scale_bounds!(runtime::Union{Nothing,LiveRuntime}, activity::AbstractMatrix, t)
     frame_lo = Float32(minimum(activity))
     frame_hi = Float32(maximum(activity))
     runtime === nothing && return frame_lo, frame_hi
 
+    if runtime.activity_scale != :simulation || Float64(t) < ACTIVITY_SCALE_WARMUP_MS
+        return frame_lo, frame_hi
+    end
+
     runtime.scale_lo = min(runtime.scale_lo, frame_lo)
     runtime.scale_hi = max(runtime.scale_hi, frame_hi)
-    if runtime.activity_scale == :simulation
-        return runtime.scale_lo, runtime.scale_hi
-    end
-    return frame_lo, frame_hi
+    return runtime.scale_lo, runtime.scale_hi
 end
 
 function _make_live_frame(
@@ -424,7 +426,7 @@ function _make_live_frame(
     phase_e_data::Vector{UInt8}=UInt8[],
     phase_i_data::Vector{UInt8}=UInt8[],
 )
-    scale_lo, scale_hi = _activity_scale_bounds!(runtime, activity)
+    scale_lo, scale_hi = _activity_scale_bounds!(runtime, activity, t)
     bytes, lo, hi = _activity_bytes(activity; lo=scale_lo, hi=scale_hi)
     retinal_bytes, _, _ = retinal_activity === activity ? (bytes, lo, hi) : _activity_bytes(retinal_activity; lo=lo, hi=hi)
     frame_ms = (time_ns() - frame_start_ns) / 1e6

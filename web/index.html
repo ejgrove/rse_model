@@ -20,7 +20,7 @@
           <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30" title="Target visualization frames per second."></label>
           <label>Visualization speed<input id="speed" type="number" min="0.006" max="10" step="0.001" value="1" title="1 is real time, 0.5 is 50%, and 2 is 200%."></label>
           <label>Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
-          <label>Activity scale<select id="activityScale"><option value="frame">frame min/max</option><option value="simulation">simulation min/max</option></select></label>
+          <label>Activity scale<select id="activityScale"><option value="frame">frame min/max</option><option value="simulation">simulation min/max (after 500 ms)</option></select></label>
           <label>Resolution (contours)<input id="plotContours" type="number" min="2" max="256" step="1" value="256" title="Number of discrete color contours used to draw the activity plots."></label>
           <label>Retinal rendering<select id="retinalRendering"><option value="interpolated">interpolated (fast)</option><option value="mapped">mapped (precise)</option></select></label>
           <label>Retinal resolution<input id="retinalResolution" type="number" min="81" max="801" step="2" value="321" title="Pixels per side in the displayed retinal view. Interpolated rendering scales to this resolution in the browser."></label>

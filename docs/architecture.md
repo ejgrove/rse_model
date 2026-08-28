@@ -55,6 +55,10 @@ The FPS and real-time metrics are browser measurements over a rolling one-second
 window. They describe frames actually drawn and simulation time actually
 observed, not an internal compute-only estimate.
 
+Simulation-wide activity scaling uses frame-local bounds during the first 500
+ms so initialization transients do not determine the fixed color range. At 500
+ms it starts accumulating the minimum and maximum of subsequent cortical frames.
+
 ## Boundary Conditions
 
 - `periodic`: samples wrap to the opposite edge.

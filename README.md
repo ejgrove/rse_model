@@ -64,6 +64,8 @@ new seed; choosing a preset first runs its saved seed from `data/rse_params.xlsx
   measured rate relative to browser wall time.
 - `Resolution (contours)` controls display color quantization without changing
   model values.
+- `Simulation min/max` uses frame-local color bounds for the first 500 ms, then
+  fixes the display range from extrema accumulated after that startup period.
 - `Retinal rendering` selects browser-interpolated output for speed or direct
   high-resolution mapping for greater coordinate precision.
 - `Retinal resolution` sets the displayed square grid, defaulting to 321 x 321

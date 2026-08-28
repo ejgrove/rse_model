@@ -370,32 +370,50 @@ end
     @test RSEModel._steps_per_frame(max_runtime, p) == max_runtime.max_steps_per_frame
 
     scale_runtime = RSEModel.LiveRuntime(activity_scale=:simulation)
-    first_frame = RSEModel._make_live_frame(
-        Float32[1 2; 3 4],
+    warmup_frame = RSEModel._make_live_frame(
+        Float32[1 2; 3 100],
         1,
-        0.0f0,
+        499.9f0,
         1.0,
         time_ns(),
         1,
         p;
         runtime=scale_runtime,
     )
-    second_frame = RSEModel._make_live_frame(
+    warmup_scale_lo = scale_runtime.scale_lo
+    warmup_scale_hi = scale_runtime.scale_hi
+    first_scaled_frame = RSEModel._make_live_frame(
         Float32[2 3; 5 6],
         2,
-        1.0f0,
+        500.0f0,
         1.0,
         time_ns(),
         1,
         p;
         runtime=scale_runtime,
     )
-    @test first_frame.lo == 1.0f0
-    @test first_frame.hi == 4.0f0
-    @test first_frame.steps_per_frame == 1
-    @test second_frame.lo == 1.0f0
-    @test second_frame.hi == 6.0f0
+    later_scaled_frame = RSEModel._make_live_frame(
+        Float32[1 4; 7 8],
+        3,
+        501.0f0,
+        1.0,
+        time_ns(),
+        1,
+        p;
+        runtime=scale_runtime,
+    )
+    @test RSEModel.ACTIVITY_SCALE_WARMUP_MS == 500.0
+    @test warmup_frame.lo == 1.0f0
+    @test warmup_frame.hi == 100.0f0
+    @test warmup_frame.steps_per_frame == 1
+    @test warmup_scale_lo == Float32(Inf)
+    @test warmup_scale_hi == -Float32(Inf)
+    @test first_scaled_frame.lo == 2.0f0
+    @test first_scaled_frame.hi == 6.0f0
+    @test later_scaled_frame.lo == 1.0f0
+    @test later_scaled_frame.hi == 8.0f0
 
+    frame_runtime = RSEModel.LiveRuntime(activity_scale=:frame)
     local_frame = RSEModel._make_live_frame(
         Float32[2 3; 5 6],
         1,
@@ -404,10 +422,12 @@ end
         time_ns(),
         1,
         p;
-        runtime=RSEModel.LiveRuntime(activity_scale=:frame),
+        runtime=frame_runtime,
     )
     @test local_frame.lo == 2.0f0
     @test local_frame.hi == 6.0f0
+    @test frame_runtime.scale_lo == Float32(Inf)
+    @test frame_runtime.scale_hi == -Float32(Inf)
 
     double_sech_config = live_config_from_query(Dict(
         "backend" => "metal",
@@ -504,6 +524,7 @@ end
         @test occursin("retinal-angle-90", body)
         @test occursin("id=\"colorMap\"", body)
         @test occursin("id=\"activityScale\"", body)
+        @test occursin("simulation min/max (after 500 ms)", body)
         @test occursin("id=\"plotContours\"", body)
         @test occursin("Resolution (contours)", body)
         @test occursin("function activeContourCount", body)

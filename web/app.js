@@ -1325,7 +1325,7 @@ function sendVisualizationUpdate() {
   const activityScale = els.activityScale.value === "simulation" ? "simulation" : "frame";
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(`visual:fps=${fps}&speed=${speed}&activity_scale=${activityScale}`);
-    const scaleText = activityScale === "simulation" ? "simulation min/max" : "frame min/max";
+    const scaleText = activityScale === "simulation" ? "simulation min/max after 500 ms" : "frame min/max";
     els.status.textContent = `Updated visualization: stream ${fps} fps, simulation speed ${formatSpeed(speed)}, activity scale ${scaleText}. Simulation state preserved.`;
   }
 }
@@ -1385,7 +1385,7 @@ function startStream() {
       if (msg.seed !== null && msg.seed !== undefined) els.seed.value = String(msg.seed);
       if (msg.retinalResolution) els.retinalResolution.value = String(msg.retinalResolution);
       if (msg.retinalRendering) els.retinalRendering.value = msg.retinalRendering;
-      const scaleText = msg.activityScale === "simulation" ? "simulation min/max" : "frame min/max";
+      const scaleText = msg.activityScale === "simulation" ? "simulation min/max after 500 ms" : "frame min/max";
       const geometryText = msg.fieldGeometry === "double_sech" ? `, double-sech V1 density ${msg.fieldDensity}` : "";
       const boundaryText = msg.boundaryX === msg.boundaryY ? `boundary ${msg.boundaryX}` : `boundary x ${msg.boundaryX}, y ${msg.boundaryY}`;
       const reflectText = (msg.boundaryX === "partial_reflect" || msg.boundaryY === "partial_reflect") ? `, reflect gain ${msg.partialReflectStrength}` : "";
