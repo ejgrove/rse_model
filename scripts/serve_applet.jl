@@ -3,6 +3,8 @@
 using ArgParse
 using RSEModel
 
+# Keep command-line concerns in this entry point; simulation and server logic
+# live in the package so they remain testable without spawning a process.
 function _settings()
     settings = ArgParseSettings(description="Serve the real-time RSE model applet.")
 

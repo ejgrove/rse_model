@@ -1,24 +1,24 @@
+"""Core model, geometry, streaming runtime, and HTTP server for the RSE web app."""
 module RSEModel
 
 include("Params.jl")
+include("Grid.jl")
 include("Kernels.jl")
 include("Geometry.jl")
 include("Model.jl")
-include("Visualization.jl")
-include("ParameterSearch.jl")
-include("CommandLine.jl")
+include("RetinalMapping.jl")
 include("Applet.jl")
 
 export ModelParams,
-    Snapshot,
-    SimulationOutput,
-    gaussian_kernel_2d,
     generate_gaussian_kernel,
     generate_gaussian_kernel_1d,
     FieldGeometry,
     field_geometry,
     double_sech_shear,
     dipole_double_sech_map,
+    DoubleSechRetinalPlan,
+    double_sech_retinal_plan,
+    double_sech_retinal_transform!,
     double_sech_retinal_transform,
     has_field_mask,
     apply_field_mask!,
@@ -27,16 +27,10 @@ export ModelParams,
     fft_convolution!,
     duty_cycle_percent_from_threshold,
     stimulus_threshold_from_duty_cycle_percent,
-    run_simulation,
-    run_simulation_gpu,
+    RetinalMapPlan,
+    retinal_map_plan,
+    retinal_transform!,
     retinal_transform,
-    ensure_unique_path,
-    make_images,
-    make_plot,
-    make_gif,
-    ParameterSearchConfig,
-    run_parameter_search,
-    parameter_search_main,
     is_fast_fft_size,
     next_fast_odd_size,
     odd_positive_int,
@@ -47,7 +41,6 @@ export ModelParams,
     stream_live_frames,
     serve_applet,
     serve_applet_async,
-    applet_url,
-    main
+    applet_url
 
 end

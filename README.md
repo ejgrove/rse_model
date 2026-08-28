@@ -1,189 +1,116 @@
-# Python Implementation of the Rule–Stoffregen–Ermentrout (2011) Neural Field Model of Stroboscopic Hallucinations
-*Designed for systematic exploration of stroboscopically-induced geometric hallucinations under controlled parameter regimes.*
+# Real-time Strobe Hallucination Simulator
 
-The original paper:
-> Rule, M., Stoffregen, M., & Ermentrout, B. (2011). *A Model for the Origin and Properties of Flicker-Induced Geometric Phosphenes*. **PLoS Computational Biology, 7**(9), e1002158. https://doi.org/10.1371/journal.pcbi.1002158
+A Julia web application for exploring the Rule-Ermentrout-Stroffegen neural
+field model of flicker-induced geometric hallucinations. Julia runs the model
+on the CPU or Apple Metal GPU and streams cortical, retinal, and phase-plane
+views to a local browser over WebSockets.
 
-## ⚠️ Safety
-**Flashing-light sensitivity warning.** The GIFs contain high-frequency flashing images that may be harmful to photosensitive individuals. View with care.
+The model is based on:
 
-## Installation
-The code is structured as a reusable simulation package with a command-line interface for reproducible experiments.
+> Rule, M., Stoffregen, M., and Ermentrout, B. (2011). A Model for the Origin
+> and Properties of Flicker-Induced Geometric Phosphenes. PLoS Computational
+> Biology, 7(9), e1002158.
 
-    git clone https://github.com/ejgrove/rse_model.git
-    cd rse_model
-    conda env create -f environment.yml
-    conda activate rse-model
+## Safety
 
-## Quick start
-The command-line interface [`(cli.py)`](src/cli.py) supports robust and reproducible simulations. A demonstration notebook [`(demo.ipynb)`](notebooks/demo.ipynb) is provided for interactive exploration.
+This application intentionally presents flickering visual stimuli. Do not use
+it if you may be sensitive to flashing light or have a history of
+photosensitive seizures.
 
-**See [```cli.py```](src/cli.py) for description of all parameters**
+## Requirements
 
-## Julia CPU Port
-The Julia implementation mirrors the Python command-line options while keeping
-the original Python files available for comparison.
+- Julia 1.10 or newer.
+- macOS on Apple Silicon for the Metal backend.
+- Any platform supported by Julia and FFTW for the CPU backend.
+
+## Install
 
 ```bash
+git clone https://github.com/ejgrove/rse_model.git
+cd rse_model
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
-julia --project=. -e 'using Pkg; Pkg.test()'
-julia --project=. src/cli.jl --interval 8000 --end 8000 --images both --label --N 201
-julia --project=. src/cli.jl --interval 8000 --end 8000 --images both --label --N 101 --fast-n
-julia --project=. src/cli.jl --gpu --interval 8000 --end 8000 --images both --label --N 101 --fast-n
 ```
 
-The core Julia files are:
+`Project.toml` and `Manifest.toml` define the complete Julia environment. No
+Python or frontend build environment is required.
 
-- [`src/CommandLine.jl`](src/CommandLine.jl): argument parsing and output routing.
-- [`src/Params.jl`](src/Params.jl): model parameters.
-- [`src/Kernels.jl`](src/Kernels.jl): Gaussian connectivity kernels.
-- [`src/Model.jl`](src/Model.jl): simulation loop and convolution.
-- [`src/Visualization.jl`](src/Visualization.jl): retinal transform, PNG heatmaps, compact plots, and GIF output.
-
-For CPU convolution, the current best baseline is planned real-FFT convolution:
-the kernels are transformed once with `plan_rfft`, each activity field reuses
-the same forward/inverse FFT plans, and intermediate Fourier arrays are
-preallocated. This preserves the Python model's circular FFT convolution while
-avoiding repeated plan construction and avoiding the extra storage/work of a
-full complex FFT.
-
-FFT grid size matters a lot. Odd sizes with only small prime factors are much
-faster than awkward prime-heavy sizes. Use `--fast-n` to move to the next
-FFT-friendly odd size, for example `101 -> 105` and `201 -> 225`.
-
-```bash
-julia --project=. scripts/benchmark_julia.jl --sizes 101,105,135,201,225 --end 100 --passes 2
-julia --project=. scripts/benchmark_julia.jl --sizes 101,201 --end 100 --passes 2 --fast-n
-```
-
-The benchmark reports `realtime_x`; values above `1.0` mean the simulation loop
-is faster than real time for the default model time step (`dt = 0.2 ms`). For
-these grid sizes, `--fftw-threads 1` is usually fastest because FFT thread
-overhead dominates the small transforms.
-
-## Julia Metal GPU
-The Metal backend runs on Apple Silicon GPUs through Metal.jl:
-
-```bash
-julia --project=. src/cli.jl --gpu --N 101 --fast-n --end 10000 --interval 10000 --images both
-julia --project=. scripts/benchmark_julia.jl --gpu --sizes 105,225,315 --end 100 --passes 2
-```
-
-The CLI prints both synchronized simulation compute time and total command time.
-The first GPU run includes Julia and Metal compilation, so use the second
-benchmark pass for steady-state speed estimates.
-
-By default, `--gpu` uses `--conv auto`, which selects the Metal separable
-Gaussian convolution path with `--kernel-cutoff 3`. This is the speed-first path
-for real-time experiments. It approximates the full circular FFT convolution by
-truncating the separable Gaussian tail, while retaining about 99.996% of the
-continuous 2D Gaussian mass before renormalization. Use `--conv fft` for the
-exact FFT baseline, or `--kernel-cutoff 4` for an even more conservative
-separable approximation.
-
-Representative warmed timings on Apple M4 Pro:
-
-- `--gpu --conv separable --kernel-cutoff 3`, `N=105`: about `0.067 ms/step`, `3.0x` real time.
-- `--gpu --conv separable --kernel-cutoff 3`, `N=225`: about `0.192 ms/step`, `1.04x` real time.
-- `--gpu --conv fft`, `N=225`: about `0.61 ms/step`, `0.33x` real time.
-
-## Real-Time Applet
-Run a local browser applet that streams live frames from Julia over a WebSocket:
+## Run
 
 ```bash
 julia --project=. scripts/serve_applet.jl
 ```
 
-Then open `http://127.0.0.1:8088/`, or use:
+Open `http://127.0.0.1:8088/`. Available server options are:
+
+```text
+--host HOST    Interface to bind (default: 127.0.0.1)
+--port PORT    Port to bind; use 0 for an available port (default: 8088)
+--open         Open the app in the default macOS browser
+```
+
+The simulation starts automatically. `Space` pauses or resumes it, and `Enter`
+resets the model with the current parameters.
+
+## App Behavior
+
+- `FPS` is the target number of visualization frames delivered each second.
+- `Visualization speed` is relative to wall time: `1` is real time, `0.5` is
+  50%, and `2` is 200%.
+- `Max speed` adaptively fills each frame interval with as many integration
+  steps as the selected backend can complete.
+- `Simulation time` is the accumulated model time, and `Real-time (x)` is its
+  measured rate relative to browser wall time.
+- `Resolution (contours)` controls display color quantization without changing
+  model values.
+- `Retinal rendering` selects browser-interpolated output for speed or direct
+  high-resolution mapping for greater coordinate precision.
+- `Retinal resolution` sets the displayed square grid, defaulting to 321 x 321
+  pixels, without changing the neural-field grid or its dynamics.
+- Square fields support periodic, edge, zero, and partial-reflection boundaries
+  independently along X and Y.
+- Double-sech V1 fields use one boundary mode over the masked geometry.
+- Coupling can be disabled, represented as two disconnected hemispheres, or
+  applied through the overlap region.
+
+The app includes cortical and retinal activity maps plus stimulus, kernel,
+neural-field, and phase-plane analysis panes. The double-sech geometry uses the
+dipole mapping described by Schira et al. (2010). Retinal projection indices
+and bilinear weights are cached once per stream. The default interpolated mode
+projects at field resolution and uses browser canvas interpolation for the
+larger display; mapped mode samples the transform directly at display
+resolution.
+
+## Project Structure
+
+```text
+scripts/serve_applet.jl   Command-line server entry point
+src/Applet.jl             Live stream runtime, protocol, and HTTP server
+src/Model.jl              Neural dynamics and CPU/Metal convolution backends
+src/Geometry.jl           Square and dipole double-sech field geometry
+src/RetinalMapping.jl     Cortical-to-retinal transforms
+src/Kernels.jl            Gaussian kernel construction
+src/Grid.jl               Odd and FFT-friendly grid sizing
+src/Params.jl             Model parameter definition
+web/index.html            App document structure
+web/styles.css            App visual design
+web/app.js                Browser rendering and controls
+test/runtests.jl          Model, backend, protocol, and server tests
+```
+
+See [docs/architecture.md](docs/architecture.md) for the runtime data flow and
+[docs/web-design-principles.md](docs/web-design-principles.md) before changing
+the interface.
+
+## Test
 
 ```bash
-julia --project=. scripts/serve_applet.jl --open
+julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-The applet exposes the main simulation controls, including duty cycle percentage
-and the Metal separable kernel window. It visualizes the cortical sheet and
-retinal view as square heatmaps, shows the selected kernel radii/mass retention,
-and reports measured `ms / step` plus `real-time x`. GPU mode keeps the model
-state on Metal and only transfers one display frame per browser update. The
-first run may pause while Julia and Metal compile; subsequent streams are the
-useful real-time benchmark.
-
-The applet also includes experimental boundary, coupling, and field-geometry
-controls. Boundary modes are `periodic`, `edge`, `zero`, and
-`partial_reflect`; non-periodic boundaries require the Metal separable
-convolution path. The `partial_reflect` mode mirrors activity across the
-boundary and scales only the reflected contribution by the reflect gain
-parameter. Coupling mode `midline` runs left and right cortical sheets, weakly
-mixes mirrored top/bottom overlap bands, displays the two sheets side-by-side,
-and keeps the retinal view square through a simple hemifield projection.
-
-The `double-sech V1` field geometry uses the dipole Double-Sech mapping from
-Schira et al. (2010) with the published `a=1.05`, `b=90`, and `k=19.3`
-parameters. It keeps two masked hemispheres with even node spacing inside the
-V1 sheet and maps both hemispheres back into one square visual field. In this
-mode, `Field density` is the resolution control; the square-grid `N` control is
-ignored. Double-sech also uses one geometry-wide boundary condition instead of
-separate x/y boundary controls. This first version uses the Metal separable path
-and does not yet implement the full V2/V3 banded extension.
-
-## Parameter Search
-Run an `A x T` sweep and save one montage per requested time point:
-
-```bash
-julia --project=. scripts/parameter_search.jl
-```
-
-The defaults match the first broad search: `N=81`, `Se=2`, `Si=5`, `50%` duty
-cycle, periodic boundary, cortical view, `T=10:5:150 ms`, `A=0.2:0.1:1.5`, and
-snapshots at `5,10,15,20 s`. Outputs are written to
-`outputs/parameter_search...` as four PNG montages plus `summary.csv`,
-`config.txt`, `grid_map.csv`, and `snapshot_manifest.csv`. Each montage has `T`
-on the x axis and `A` on the y axis, and the CSV files record the exact A/T
-grid-to-tile mapping used to assemble the images.
-
-Useful overrides:
-
-```bash
-julia --project=. scripts/parameter_search.jl --backend cpu --workers 6 --duty-cycle 50
-julia --project=. scripts/parameter_search.jl --view retinal --backend metal
-julia --project=. scripts/parameter_search.jl --T-range 40 120 5 --A-range 0.4 1.2 0.1 --times-sec 5,10
-julia --project=. scripts/parameter_search.jl --dry-run
-```
-
-### CLI examples
-
-### Cortical and Retinal images
-```
-python -m src.cli --interval 8000 --end 8000 --images both --label --N 201
-```
-
-<img src="assets/images/cortical_8000ms.png" alt="Cortical Plot" width="350"> <img src="assets/images/retinal_8000ms.png" alt="Retinal Plot" width="350">
-
-*The cortical plot shows activity in visual cortical coordinates, while the retinal plot applies the inverse retino-cortical transform to approximate the perceived hallucination.*
-
-
-### Plots
-```
-python -m src.cli --interval 8000 --end 8000 --plot --label --seed 42 --cmap nipy_spectral --T 55
-```
-
-<img src="assets/plots/plot_8000ms.png" alt="" width="700">
-
-
-### GIFs
-```
-python -m src.cli --end 8000 --gif --N 101 --seed 43 --cmap nipy_spectral --T 50
-```
-
-[```assets/gifs/example4_progression_T50_nipy_spectral.gif```](assets/gifs/example4_progression_T50_nipy_spectral.gif) – WARNING: flashing content
-
-
-## Tips
-- Periods (`--T`) in the range 50–60 ms tend to produce roll-like planforms, while periods around 110–130 ms often yield hexagonal patterns.
-- Adjust the size of the neural field (`--N`) to increase the spatial frequency of the patterns. However, increasing `--N` above 250 reduces the stability of the pattern formation.
-
-## More Examples
-See [`assets/gifs`](assets/gifs) for more examples – WARNING: flashing content
+The suite checks the field geometry, stimulus, coupling, retinal mapping, CPU
+and Metal convolution paths, timing behavior, static assets, WebSocket frame
+protocol, and local HTTP server.
 
 ## License
-MIT. See [`LICENSE`](LICENSE/)
+
+MIT. See [LICENSE](LICENSE).

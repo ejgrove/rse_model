@@ -1,3 +1,4 @@
+"""Node lattice, mask, and cortical-coordinate bounds for one field geometry."""
 Base.@kwdef struct FieldGeometry
     kind::Symbol = :square
     rows::Int
@@ -16,6 +17,8 @@ const DOUBLE_SECH_A = 1.05
 const DOUBLE_SECH_B = 90.0
 const DOUBLE_SECH_K = 19.3
 const DOUBLE_SECH_E_MAX = 90.0
+
+# Geometry construction
 
 function _normalize_field_geometry(kind::Symbol)
     kind in (:square, :rect, :rectangular) && return :square
@@ -38,6 +41,7 @@ function double_sech_shear(eccentricity::Real, polar::Real, pole::Real)
     return _sech(Float64(polar))^exponent
 end
 
+"""Evaluate the dipole double-sech cortical map described by Schira et al. (2010)."""
 function dipole_double_sech_map(
     eccentricity::Real,
     polar::Real;
@@ -117,6 +121,12 @@ function _double_sech_v1_mask(rows::Integer, cols::Integer, bounds, poly)
     return mask
 end
 
+"""
+    field_geometry(kind, n=81; density=1)
+
+Construct either an unmasked square lattice or a uniformly sampled V1-shaped
+double-sech lattice. `density` scales both double-sech lattice dimensions.
+"""
 function field_geometry(kind::Symbol, n::Integer=DOUBLE_SECH_BASE_ROWS; density::Real=1.0)
     normalized = _normalize_field_geometry(kind)
     rows = normalized == :square ? _density_scaled_size(n, density) : _density_scaled_size(DOUBLE_SECH_BASE_ROWS, density)
@@ -140,6 +150,8 @@ function field_geometry(kind::Symbol, n::Integer=DOUBLE_SECH_BASE_ROWS; density:
         y_max=y_max,
     )
 end
+
+# Field masks and coupling borders
 
 function has_field_mask(geometry::FieldGeometry)
     return geometry.kind != :square
@@ -183,33 +195,44 @@ function field_border_mask(mask::AbstractMatrix{Bool}, width::Integer)
     return border
 end
 
-function _sample_bilinear_zero(img::AbstractMatrix, mask::AbstractMatrix{Bool}, y::Float64, x::Float64)
-    rows, cols = size(img)
-    if x < 1 || y < 1 || x > cols || y > rows
-        return zero(eltype(img))
-    end
-    x0 = floor(Int, x)
-    y0 = floor(Int, y)
-    x1 = min(x0 + 1, cols)
-    y1 = min(y0 + 1, rows)
-    x0 = max(x0, 1)
-    y0 = max(y0, 1)
-    dx = x - x0
-    dy = y - y0
+# Double-sech inverse mapping
 
-    v00 = mask[y0, x0] ? img[y0, x0] : zero(eltype(img))
-    v01 = mask[y0, x1] ? img[y0, x1] : zero(eltype(img))
-    v10 = mask[y1, x0] ? img[y1, x0] : zero(eltype(img))
-    v11 = mask[y1, x1] ? img[y1, x1] : zero(eltype(img))
-
-    return (1 - dy) * ((1 - dx) * v00 + dx * v01) +
-           dy * ((1 - dx) * v10 + dx * v11)
+struct MaskedBilinearPlan{T<:AbstractFloat}
+    index00::Vector{Int32}
+    index01::Vector{Int32}
+    index10::Vector{Int32}
+    index11::Vector{Int32}
+    weight00::Vector{T}
+    weight01::Vector{T}
+    weight10::Vector{T}
+    weight11::Vector{T}
 end
 
-function _sample_bilinear_masked(img::AbstractMatrix, mask::AbstractMatrix{Bool}, y::Float64, x::Float64)
-    rows, cols = size(img)
+"""Cached masked bilinear coordinates for a two-hemisphere double-sech projection."""
+struct DoubleSechRetinalPlan{T<:AbstractFloat}
+    source_size::Tuple{Int,Int}
+    output_size::Tuple{Int,Int}
+    left::MaskedBilinearPlan{T}
+    right::MaskedBilinearPlan{T}
+end
+
+function _empty_masked_bilinear_plan(count::Int, ::Type{T}) where {T<:AbstractFloat}
+    return MaskedBilinearPlan(
+        ones(Int32, count),
+        ones(Int32, count),
+        ones(Int32, count),
+        ones(Int32, count),
+        zeros(T, count),
+        zeros(T, count),
+        zeros(T, count),
+        zeros(T, count),
+    )
+end
+
+function _masked_bilinear_stencil(mask::AbstractMatrix{Bool}, y::Float64, x::Float64, ::Type{T}) where {T<:AbstractFloat}
+    rows, cols = size(mask)
     if x < 1 || y < 1 || x > cols || y > rows
-        return zero(eltype(img))
+        return (Int32(1), Int32(1), Int32(1), Int32(1), zero(T), zero(T), zero(T), zero(T))
     end
     x0 = floor(Int, x)
     y0 = floor(Int, y)
@@ -220,31 +243,26 @@ function _sample_bilinear_masked(img::AbstractMatrix, mask::AbstractMatrix{Bool}
     dx = x - x0
     dy = y - y0
 
-    w00 = (1 - dy) * (1 - dx)
-    w01 = (1 - dy) * dx
-    w10 = dy * (1 - dx)
-    w11 = dy * dx
-    value = zero(promote_type(eltype(img), Float64))
-    weight = 0.0
-
-    if mask[y0, x0]
-        value += w00 * img[y0, x0]
-        weight += w00
-    end
-    if mask[y0, x1]
-        value += w01 * img[y0, x1]
-        weight += w01
-    end
-    if mask[y1, x0]
-        value += w10 * img[y1, x0]
-        weight += w10
-    end
-    if mask[y1, x1]
-        value += w11 * img[y1, x1]
-        weight += w11
-    end
-
-    return weight > 0 ? value / weight : zero(eltype(img))
+    weights = (
+        mask[y0, x0] ? (1 - dy) * (1 - dx) : 0.0,
+        mask[y0, x1] ? (1 - dy) * dx : 0.0,
+        mask[y1, x0] ? dy * (1 - dx) : 0.0,
+        mask[y1, x1] ? dy * dx : 0.0,
+    )
+    total_weight = sum(weights)
+    total_weight > 0 || return (Int32(1), Int32(1), Int32(1), Int32(1), zero(T), zero(T), zero(T), zero(T))
+    linear = LinearIndices(mask)
+    indices = (
+        Int32(linear[y0, x0]),
+        Int32(linear[y0, x1]),
+        Int32(linear[y1, x0]),
+        Int32(linear[y1, x1]),
+    )
+    normalized = ntuple(index -> T(weights[index] / total_weight), 4)
+    return (
+        indices[1], indices[2], indices[3], indices[4],
+        normalized[1], normalized[2], normalized[3], normalized[4],
+    )
 end
 
 function _double_sech_grid_position(geometry::FieldGeometry, eccentricity::Real, polar::Real)
@@ -254,10 +272,90 @@ function _double_sech_grid_position(geometry::FieldGeometry, eccentricity::Real,
     return y, x
 end
 
-function _double_sech_sample(activity::AbstractMatrix, geometry::FieldGeometry, eccentricity::Real, polar::Real; flip_angular_axis::Bool=false)
-    source_polar = flip_angular_axis ? -polar : polar
-    y_source, x_source = _double_sech_grid_position(geometry, eccentricity, source_polar)
-    return _sample_bilinear_masked(activity, geometry.mask, y_source, x_source)
+function _set_masked_stencil!(plan::MaskedBilinearPlan{T}, pixel::Int, stencil, blend::Real) where {T}
+    plan.index00[pixel], plan.index01[pixel], plan.index10[pixel], plan.index11[pixel] = stencil[1:4]
+    blend_t = T(blend)
+    plan.weight00[pixel] = blend_t * stencil[5]
+    plan.weight01[pixel] = blend_t * stencil[6]
+    plan.weight10[pixel] = blend_t * stencil[7]
+    plan.weight11[pixel] = blend_t * stencil[8]
+    return
+end
+
+"""Precompute the masked inverse double-sech map for a fixed output resolution."""
+function double_sech_retinal_plan(
+    geometry::FieldGeometry;
+    output_size=(geometry.rows, geometry.rows),
+    seam_blend_pixels::Real=1,
+    flip_right_angular_axis::Bool=true,
+    dtype::Type{T}=Float32,
+) where {T<:AbstractFloat}
+    geometry.kind == :double_sech || throw(ArgumentError("double_sech_retinal_transform requires double-sech geometry."))
+    height, width = output_size
+    height > 0 && width > 0 || throw(ArgumentError("double-sech retinal-map output dimensions must be positive."))
+    left = _empty_masked_bilinear_plan(height * width, T)
+    right = _empty_masked_bilinear_plan(height * width, T)
+    visual_pixel_width = 2 / max(width - 1, 1)
+    seam_blend_width = max(0.0, Float64(seam_blend_pixels)) * visual_pixel_width
+
+    @inbounds for col in 1:width, row in 1:height
+        x_visual = -1 + 2 * (col - 1) / max(width - 1, 1)
+        y_visual = 1 - 2 * (row - 1) / max(height - 1, 1)
+        r = hypot(x_visual, y_visual)
+        r > 1 && continue
+
+        eccentricity = DOUBLE_SECH_E_MAX * r
+        polar = r < 1e-9 ? 0.0 : atan(y_visual, abs(x_visual))
+        left_blend = if seam_blend_width > 0 && abs(x_visual) <= seam_blend_width
+            clamp(0.5 + 0.5 * x_visual / seam_blend_width, 0.0, 1.0)
+        else
+            x_visual > 0 ? 1.0 : 0.0
+        end
+        right_blend = 1 - left_blend
+        pixel = row + (col - 1) * height
+
+        if left_blend > 0
+            left_y, left_x = _double_sech_grid_position(geometry, eccentricity, polar)
+            left_stencil = _masked_bilinear_stencil(geometry.mask, left_y, left_x, T)
+            _set_masked_stencil!(left, pixel, left_stencil, left_blend)
+        end
+        if right_blend > 0
+            right_polar = flip_right_angular_axis ? -polar : polar
+            right_y, right_x = _double_sech_grid_position(geometry, eccentricity, right_polar)
+            right_stencil = _masked_bilinear_stencil(geometry.mask, right_y, right_x, T)
+            _set_masked_stencil!(right, pixel, right_stencil, right_blend)
+        end
+    end
+
+    return DoubleSechRetinalPlan((geometry.rows, geometry.cols), output_size, left, right)
+end
+
+function _apply_masked_bilinear_plan(input::AbstractMatrix, plan::MaskedBilinearPlan, pixel::Int)
+    @inbounds return (
+        plan.weight00[pixel] * input[plan.index00[pixel]] +
+        plan.weight01[pixel] * input[plan.index01[pixel]] +
+        plan.weight10[pixel] * input[plan.index10[pixel]] +
+        plan.weight11[pixel] * input[plan.index11[pixel]]
+    )
+end
+
+"""Apply a cached double-sech projection without rebuilding its geometry."""
+function double_sech_retinal_transform!(
+    output::AbstractMatrix,
+    left_activity::AbstractMatrix,
+    right_activity::AbstractMatrix,
+    plan::DoubleSechRetinalPlan,
+)
+    size(left_activity) == plan.source_size || throw(DimensionMismatch("left double-sech activity does not match its plan."))
+    size(right_activity) == plan.source_size || throw(DimensionMismatch("right double-sech activity does not match its plan."))
+    size(output) == plan.output_size || throw(DimensionMismatch("double-sech output does not match its plan."))
+
+    @inbounds for pixel in eachindex(output)
+        output[pixel] =
+            _apply_masked_bilinear_plan(left_activity, plan.left, pixel) +
+            _apply_masked_bilinear_plan(right_activity, plan.right, pixel)
+    end
+    return output
 end
 
 function double_sech_retinal_transform(
@@ -268,49 +366,15 @@ function double_sech_retinal_transform(
     seam_blend_pixels::Real=1,
     flip_right_angular_axis::Bool=true,
 )
-    geometry.kind == :double_sech || throw(ArgumentError("double_sech_retinal_transform requires double-sech geometry."))
-    height, width = output_size
     T = promote_type(eltype(left_activity), eltype(right_activity))
-    output = Matrix{T}(undef, height, width)
-    visual_pixel_width = 2 / max(width - 1, 1)
-    seam_blend_width = max(0.0, Float64(seam_blend_pixels)) * visual_pixel_width
-
-    @inbounds for col in 1:width, row in 1:height
-        x_visual = -1 + 2 * (col - 1) / max(width - 1, 1)
-        y_visual = 1 - 2 * (row - 1) / max(height - 1, 1)
-        r = hypot(x_visual, y_visual)
-        if r > 1
-            output[row, col] = zero(T)
-            continue
-        end
-
-        eccentricity = DOUBLE_SECH_E_MAX * r
-        polar = r < 1e-9 ? 0.0 : atan(y_visual, abs(x_visual))
-        if seam_blend_width > 0 && abs(x_visual) <= seam_blend_width
-            left_value = _double_sech_sample(left_activity, geometry, eccentricity, polar)
-            right_value = _double_sech_sample(
-                right_activity,
-                geometry,
-                eccentricity,
-                polar;
-                flip_angular_axis=flip_right_angular_axis,
-            )
-            left_weight = clamp(0.5 + 0.5 * x_visual / seam_blend_width, 0.0, 1.0)
-            output[row, col] = T((1 - left_weight) * right_value + left_weight * left_value)
-        else
-            if x_visual > 0
-                output[row, col] = T(_double_sech_sample(left_activity, geometry, eccentricity, polar))
-            else
-                output[row, col] = T(_double_sech_sample(
-                    right_activity,
-                    geometry,
-                    eccentricity,
-                    polar;
-                    flip_angular_axis=flip_right_angular_axis,
-                ))
-            end
-        end
-    end
-
-    return output
+    T <: AbstractFloat || throw(ArgumentError("double_sech_retinal_transform requires floating-point input."))
+    plan = double_sech_retinal_plan(
+        geometry;
+        output_size=output_size,
+        seam_blend_pixels=seam_blend_pixels,
+        flip_right_angular_axis=flip_right_angular_axis,
+        dtype=T,
+    )
+    output = Matrix{T}(undef, output_size)
+    return double_sech_retinal_transform!(output, left_activity, right_activity, plan)
 end

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Real-time Strobe Hallucination Simulator</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <!-- Simulation controls -->
+    <section class="panel">
+      <h2>Rule-Ermentrout-Stroffegen model</h2>
+      <h1>Real-time Strobe Hallucination Simulator</h1>
+      <p class="subtitle key-hints"><span class="key">Space</span> pause/play <span class="key">Enter</span> reset/apply</p>
+
+      <div class="control-section featured">
+        <div class="section-title">Visualization</div>
+        <div class="control-grid">
+          <label>FPS<input id="fps" type="number" min="1" max="60" step="1" value="30" title="Target visualization frames per second."></label>
+          <label>Visualization speed<input id="speed" type="number" min="0.006" max="10" step="0.001" value="1" title="1 is real time, 0.5 is 50%, and 2 is 200%."></label>
+          <label>Colormap<select id="colorMap"><option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option><option value="inferno">inferno</option><option value="cividis">cividis</option><option value="turbo">turbo</option><option value="nipy_spectral">nipy_spectral</option><option value="gray">gray</option></select></label>
+          <label>Activity scale<select id="activityScale"><option value="frame">frame min/max</option><option value="simulation">simulation min/max</option></select></label>
+          <label>Resolution (contours)<input id="plotContours" type="number" min="2" max="256" step="1" value="256" title="Number of discrete color contours used to draw the activity plots."></label>
+          <label>Retinal rendering<select id="retinalRendering"><option value="interpolated">interpolated (fast)</option><option value="mapped">mapped (precise)</option></select></label>
+          <label>Retinal resolution<input id="retinalResolution" type="number" min="81" max="801" step="2" value="321" title="Pixels per side in the displayed retinal view. Interpolated rendering scales to this resolution in the browser."></label>
+          <label id="maxSpeedControl" class="check-row wide"><input id="maxSpeed" type="checkbox"> Max speed</label>
+        </div>
+      </div>
+
+      <div class="control-section featured">
+        <div class="section-title">Model Parameters</div>
+        <div class="subsection-title">Strobe</div>
+        <div class="control-grid triad">
+          <label>Amplitude<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
+          <label>Period (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
+          <label>Duty cycle (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
+        </div>
+        <div class="subsection-title">Neural field</div>
+        <div class="control-grid triad">
+          <label class="span-2">Field geometry<select id="fieldGeometry"><option value="square">Square</option><option value="double_sech">Double-sech V1</option></select></label>
+          <label id="fieldDensityControl" class="hidden-control span-2">Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
+          <label id="nControl">Sheet size<input id="n" type="number" min="5" step="2" value="81"></label>
+          <label><span>&sigma;<sub>e</sub></span><input id="se" type="number" min="0.1" step="0.05" value="2"></label>
+          <label><span>&sigma;<sub>i</sub></span><input id="si" type="number" min="0.1" step="0.05" value="5"></label>
+          <label>Time step (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
+        </div>
+      </div>
+
+      <details class="control-section">
+        <summary class="section-title">Implementation</summary>
+        <div class="control-section-body">
+          <div class="control-grid">
+            <label>Backend<select id="backend"><option value="metal">GPU (Metal)</option><option value="cpu">CPU</option></select></label>
+            <label>Convolution<select id="conv"><option value="separable">Separable</option><option value="fft">FFT</option></select></label>
+            <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
+            <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
+          </div>
+          <label id="fastNControl" class="check-row"><input id="fastN" type="checkbox" checked> Use FFT-friendly odd sheet size</label>
+        </div>
+      </details>
+
+      <details class="control-section">
+        <summary class="section-title">Boundary</summary>
+        <div class="control-section-body">
+          <div class="control-grid">
+            <label id="boundaryControl" class="hidden-control">Boundary<select id="boundary"><option value="edge">Edge</option><option value="zero">Zero</option><option value="partial_reflect">Partial reflect</option></select></label>
+            <label id="boundaryXControl">X<select id="boundaryX"><option value="periodic">Periodic</option><option value="edge">Edge</option><option value="zero">Zero</option><option value="partial_reflect">Partial reflect</option></select></label>
+            <label id="boundaryYControl">Y<select id="boundaryY"><option value="periodic">Periodic</option><option value="edge">Edge</option><option value="zero">Zero</option><option value="partial_reflect">Partial reflect</option></select></label>
+            <label id="partialReflectControl" class="hidden-control">Reflect gain<input id="partialReflectStrength" type="number" min="0" max="1" step="0.05" value="0.5"></label>
+          </div>
+        </div>
+      </details>
+
+      <details class="control-section">
+        <summary class="section-title">Coupling</summary>
+        <div class="control-section-body">
+          <div class="control-grid">
+            <label>Type<select id="coupling"><option value="off">None</option><option value="no_connection">No connection</option><option value="overlap">Overlap</option></select></label>
+            <label id="overlapRowsControl" class="hidden-control">Overlap rows<input id="overlapRows" type="number" min="2" step="2" value="6"></label>
+            <label id="couplingStrengthControl" class="hidden-control">Strength<input id="couplingStrength" type="number" min="0" max="0.5" step="0.005" value="0.02"></label>
+          </div>
+        </div>
+      </details>
+
+      <details class="control-section">
+        <summary class="section-title">Selected Parameters</summary>
+        <div class="control-section-body">
+          <div class="preset-grid">
+            <button class="preset-button active" data-preset="default" aria-label="Preset 1: Dots" aria-pressed="true"><strong>1</strong></button>
+            <button class="preset-button" data-preset="p1" aria-label="Preset 2: Zig-zag" aria-pressed="false"><strong>2</strong></button>
+            <button class="preset-button" data-preset="p2" aria-label="Preset 3: Square" aria-pressed="false"><strong>3</strong></button>
+            <button class="preset-button" data-preset="p3" aria-label="Preset 4: Lines and dots" aria-pressed="false"><strong>4</strong></button>
+            <button class="preset-button" data-preset="p4" aria-label="Preset 5: Hex rings" aria-pressed="false"><strong>5</strong></button>
+          </div>
+          <div id="presetTitle" class="preset-title">1. Dots</div>
+          <div class="section-actions">
+            <button id="printParams" class="secondary">Print settings</button>
+          </div>
+          <pre id="paramOutput" class="param-output">Click Print settings to write the simulation settings here.</pre>
+        </div>
+      </details>
+      <div class="button-row">
+        <button id="pausePlay" class="pause">Pause</button>
+        <button id="reset" class="secondary">Reset</button>
+      </div>
+    </section>
+
+    <!-- Live metrics, model views, and analysis panes -->
+    <section class="stage">
+      <div class="metrics">
+        <div class="metric"><span>Simulation time</span><strong id="simTime">0 ms</strong></div>
+        <div class="metric"><span>FPS</span><strong id="streamFps">0</strong></div>
+        <div class="metric"><span>Step interval</span><strong id="stepInterval">1</strong></div>
+        <div class="metric"><span>Real-time (x)</span><strong id="rtx">0</strong></div>
+      </div>
+      <div class="views">
+        <div class="view cortical-view">
+          <div class="plot-title">Cortical Sheet</div>
+          <div id="corticalFrame" class="canvas-frame cortical-frame">
+            <canvas id="cortical"></canvas>
+            <span id="hemiLeft" class="hemi-label hemi-left">Cortical sheet</span>
+            <span id="hemiRight" class="hemi-label hemi-right">Right hemisphere</span>
+            <span class="axis-label axis-top-left">0&deg;</span>
+            <span class="axis-label axis-bottom-left">0&deg;</span>
+            <span class="axis-label axis-top-right">0&deg;</span>
+            <span class="axis-label axis-bottom-right">0&deg;</span>
+            <span class="ecc-label cortical-ecc cortical-fovea-left">fovea</span>
+            <span class="ecc-label cortical-ecc cortical-periphery-left">periphery</span>
+            <span class="ecc-label cortical-ecc cortical-fovea-right">fovea</span>
+            <span class="ecc-label cortical-ecc cortical-periphery-right">periphery</span>
+          </div>
+        </div>
+        <div class="view visual-field-view">
+          <div class="plot-title">Visual Field</div>
+          <div class="visual-field-wrap">
+            <div class="canvas-frame retinal-frame">
+              <canvas id="retinal"></canvas>
+              <span class="axis-label retinal-angle-90">90&deg;</span>
+              <span class="axis-label retinal-angle-0">0&deg;</span>
+              <span class="axis-label retinal-angle-180">180&deg;</span>
+              <span class="axis-label retinal-angle-270">270&deg;</span>
+            </div>
+            <div class="legend-wrap">
+              <span id="legendHigh" class="legend-high">high</span>
+              <div id="legend" class="legend"></div>
+              <span id="legendLow" class="legend-low">low</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="frame-card">
+        <div class="frame-toolbar">
+          <div class="view-title">Analysis Panes</div>
+          <select id="frameSelect">
+            <option value="stimulus">Stimulus</option>
+            <option value="kernel">Kernel</option>
+            <option value="field">Neural field</option>
+            <option value="phase">Phase plane</option>
+          </select>
+        </div>
+        <div id="stimulusPanel" class="frame-panel" data-frame="stimulus">
+          <div class="view-head"><div class="view-title">Stimulus</div><div class="view-note" id="stimulusInfo">moving 0.5 s window</div></div>
+          <canvas id="stimulusGraph" class="stimulus-canvas"></canvas>
+        </div>
+        <div id="kernelPanel" class="frame-panel hidden-control" data-frame="kernel">
+          <div class="view-head"><div class="view-title">Kernel</div><div class="view-note" id="kernelInfo">-</div></div>
+          <canvas id="kernelGraph" class="kernel-canvas"></canvas>
+          <div class="tiny-note">Cutoff is measured in sigma units: r<sub>e</sub> = ceil(cutoff x &sigma;<sub>e</sub>) and r<sub>i</sub> = ceil(cutoff x &sigma;<sub>i</sub>). The applet uses the separable product of the 1D kernels in x and y.</div>
+        </div>
+        <div id="fieldPanel" class="frame-panel hidden-control" data-frame="field">
+          <div class="view-head"><div class="view-title">Neural Field</div><div class="view-note" id="fieldInfo">node lattice and retinal projection</div></div>
+          <canvas id="fieldGraph" class="field-canvas"></canvas>
+        </div>
+        <div id="phasePanel" class="frame-panel hidden-control" data-frame="phase">
+          <div class="view-head"><div class="view-title">Phase Plane</div><div class="view-note" id="phaseInfo"></div></div>
+          <div class="phase-options">
+            <label><input id="phaseIncludeAverage" type="checkbox" checked> Include average</label>
+          </div>
+          <canvas id="phaseGraph" class="phase-canvas"></canvas>
+        </div>
+      </div>
+      <div id="status" class="status">Streaming starts automatically. Use Pause or Reset while tuning parameters.</div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

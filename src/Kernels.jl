@@ -1,10 +1,4 @@
-function gaussian_kernel_2d(x, y, sigma)
-    s = float(sigma)
-    norm_factor = inv(pi * s^2)
-    exponent = -(abs(x)^2 + abs(y)^2) / s^2
-    return norm_factor * exp(exponent)
-end
-
+"""Build the centered two-dimensional Gaussian kernel used by FFT convolution."""
 function generate_gaussian_kernel(sigma, N::Integer; dtype::Type{T}=Float32) where {T<:AbstractFloat}
     isodd(N) || throw(ArgumentError("N must be odd to center the Gaussian kernel."))
     radius = div(N, 2)
@@ -21,6 +15,7 @@ function generate_gaussian_kernel(sigma, N::Integer; dtype::Type{T}=Float32) whe
     return kernel
 end
 
+"""Build a centered one-dimensional Gaussian kernel for separable Metal convolution."""
 function generate_gaussian_kernel_1d(
     sigma,
     radius::Integer;

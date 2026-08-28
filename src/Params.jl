@@ -1,3 +1,10 @@
+"""
+Parameters for the RSE neural field.
+
+Times are expressed in milliseconds. `Aee`, `Aei`, `Aie`, and `Aii` are the
+population gains; `He` and `Hi` are firing thresholds; `Ge` and `Gi` scale the
+strobe input; and `Ne` and `Ni` scale independent Gaussian noise.
+"""
 struct ModelParams{T<:AbstractFloat}
     dt::T
     Te::T

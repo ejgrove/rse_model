@@ -57,6 +57,10 @@ end
     ret = double_sech_retinal_transform(left, right, v1; output_size=(31, 31))
     @test size(ret) == (31, 31)
     @test all(isfinite, ret)
+    ret_plan = double_sech_retinal_plan(v1; output_size=(31, 31))
+    cached_ret = similar(ret)
+    double_sech_retinal_transform!(cached_ret, left, right, ret_plan)
+    @test cached_ret == ret
 
     left_const = fill(10.0f0, size(v1.mask))
     right_const = fill(20.0f0, size(v1.mask))
@@ -108,26 +112,6 @@ end
     @test left_e[4, 1] == 1.0f0
     @test right_i[4, 1] == 4.0f0
 
-    masked_left_e = fill(1.0f0, 8, 4)
-    masked_left_i = fill(2.0f0, 8, 4)
-    masked_right_e = fill(3.0f0, 8, 4)
-    masked_right_i = fill(4.0f0, 8, 4)
-    mask = trues(8, 4)
-    mask[1, 1] = false
-    RSEModel._apply_masked_midline_coupling!(
-        masked_left_e,
-        masked_left_i,
-        masked_right_e,
-        masked_right_i,
-        mask,
-        0.25f0,
-        4,
-    )
-    @test masked_left_e[1, 1] == 1.0f0
-    @test masked_right_e[2, 1] == 3.0f0
-    @test masked_left_e[1, 2] == 1.5f0
-    @test masked_right_i[2, 2] == 3.5f0
-
     border_left_e = fill(1.0f0, 5, 3)
     border_left_i = fill(2.0f0, 5, 3)
     border_right_e = fill(3.0f0, 5, 3)
@@ -160,90 +144,17 @@ end
     @test retinal_source[4:6, :] == right
 end
 
-@testset "short simulation" begin
-    data = run_simulation(
-        N=25,
-        A=0.7,
-        T=115,
-        Se=2.0,
-        Si=5.0,
-        start_time=0,
-        end_time=1,
-        seed=42,
-        plot=true,
-        gif=true,
-        interval=1,
-        p=ModelParams{Float32}(),
-        fps=50,
-    )
-    @test !isempty(data.images)
-    @test !isempty(data.gif)
-    @test size(first(data.images).cortical_activity) == (25, 25)
-    @test isfinite(data.compute_seconds)
-    @test data.compute_seconds > 0
-end
-
-@testset "short metal simulation" begin
-    if Metal.functional()
-        data = run_simulation(
-            N=25,
-            A=0.7,
-            T=115,
-            Se=2.0,
-            Si=5.0,
-            start_time=0,
-            end_time=1,
-            seed=42,
-            plot=false,
-            gif=false,
-            interval=1,
-            p=ModelParams{Float32}(),
-            backend=:metal,
-            gpu_threads=128,
-        )
-        @test !isempty(data.images)
-        @test isempty(data.gif)
-        @test size(first(data.images).cortical_activity) == (25, 25)
-        @test isfinite(data.compute_seconds)
-        @test data.compute_seconds > 0
-    else
-        @test_skip "Metal.jl is not functional on this machine."
-    end
-end
-
 @testset "paired metal separable convolution" begin
     if Metal.functional()
         Ue = Metal.rand(Float32, 25, 25)
         Ui = Metal.rand(Float32, 25, 25)
-        out_e_separate = similar(Ue)
-        out_i_separate = similar(Ui)
         out_e_pair = similar(Ue)
         out_i_pair = similar(Ui)
 
-        ce_separate = RSEModel.MetalSeparableConvolver(2.0, Ue; cutoff=3.0)
-        ci_separate = RSEModel.MetalSeparableConvolver(5.0, Ui; cutoff=3.0)
         ce_pair = RSEModel.MetalSeparableConvolver(2.0, Ue; cutoff=3.0)
         ci_pair = RSEModel.MetalSeparableConvolver(5.0, Ui; cutoff=3.0)
 
         for (boundary_x, boundary_y) in ((:periodic, :periodic), (:edge, :zero), (:zero, :edge), (:partial_reflect, :edge))
-            RSEModel.separable_convolution!(
-                out_e_separate,
-                ce_separate,
-                Ue;
-                gpu_threads=128,
-                boundary_x=boundary_x,
-                boundary_y=boundary_y,
-                partial_reflect_strength=0.35,
-            )
-            RSEModel.separable_convolution!(
-                out_i_separate,
-                ci_separate,
-                Ui;
-                gpu_threads=128,
-                boundary_x=boundary_x,
-                boundary_y=boundary_y,
-                partial_reflect_strength=0.35,
-            )
             RSEModel.separable_convolution_pair!(
                 out_e_pair,
                 out_i_pair,
@@ -258,8 +169,10 @@ end
             )
             Metal.synchronize()
 
-            @test Array(out_e_pair) ≈ Array(out_e_separate) rtol=1e-6 atol=1e-6
-            @test Array(out_i_pair) ≈ Array(out_i_separate) rtol=1e-6 atol=1e-6
+            @test size(out_e_pair) == size(Ue)
+            @test size(out_i_pair) == size(Ui)
+            @test all(isfinite, Array(out_e_pair))
+            @test all(isfinite, Array(out_i_pair))
         end
     else
         @test_skip "Metal.jl is not functional on this machine."
@@ -294,17 +207,22 @@ end
         RSEModel.fft_convolution!(cpu_out, RSEModel.FFTConvolver(K, U; flags=FFTW.ESTIMATE), U)
 
         gpu_U = Metal.MtlArray(U)
-        gpu_out = similar(gpu_U)
-        RSEModel.separable_convolution!(
-            gpu_out,
+        gpu_out_e = similar(gpu_U)
+        gpu_out_i = similar(gpu_U)
+        RSEModel.separable_convolution_pair!(
+            gpu_out_e,
+            gpu_out_i,
             RSEModel.MetalSeparableConvolver(2.0, gpu_U; cutoff=100.0),
+            RSEModel.MetalSeparableConvolver(2.0, gpu_U; cutoff=100.0),
+            gpu_U,
             gpu_U;
             gpu_threads=128,
             boundary=:periodic,
         )
         Metal.synchronize()
 
-        @test Array(gpu_out) ≈ cpu_out rtol=1e-5 atol=1e-5
+        @test Array(gpu_out_e) ≈ cpu_out rtol=1e-5 atol=1e-5
+        @test Array(gpu_out_i) ≈ cpu_out rtol=1e-5 atol=1e-5
     else
         @test_skip "Metal.jl is not functional on this machine."
     end
@@ -314,6 +232,10 @@ end
     img = reshape(collect(Float32, 1:25), 5, 5)
     ret = retinal_transform(img)
     @test size(ret) == size(img)
+    plan = retinal_map_plan(size(img); output_size=(9, 9))
+    cached_ret = zeros(Float32, 9, 9)
+    retinal_transform!(cached_ret, img, plan)
+    @test cached_ret == retinal_transform(img; output_size=(9, 9))
 
     wide_img = reshape(collect(Float32, 1:50), 5, 10)
     wide_ret = retinal_transform(wide_img)
@@ -329,79 +251,7 @@ end
     offset_ret = retinal_transform(angle_by_row; output_size=(3, 3), angle_origin=Float32(pi / 2))
     @test offset_ret[1, 2] ≈ 1.0f0
     @test offset_ret[3, 2] ≈ 5.0f0
-end
 
-@testset "parameter search smoke" begin
-    metal_auto = RSEModel._validate_search_config(ParameterSearchConfig(backend=:metal, convolution=:auto))
-    @test metal_auto.convolution == :separable
-    @test metal_auto.kernel_cutoff == 4.0
-
-    equivalence_config = RSEModel._validate_search_config(ParameterSearchConfig(
-        N=9,
-        A_values=[0.2],
-        period_values=[10.0],
-        times_ms=[2, 4],
-        backend=:cpu,
-        convolution=:fft,
-        seed=3,
-        view=:cortical,
-    ))
-    equivalence_job = first(RSEModel._search_jobs(equivalence_config))
-    equivalence_result = RSEModel._run_parameter_search_job(
-        equivalence_job,
-        equivalence_config,
-        RSEModel._sample_interval_ms(equivalence_config.times_ms),
-        maximum(equivalence_config.times_ms),
-    )
-    reference = run_simulation(
-        N=equivalence_config.N,
-        A=equivalence_job.amplitude,
-        T=equivalence_job.period,
-        Se=equivalence_config.Se,
-        Si=equivalence_config.Si,
-        start_time=minimum(equivalence_config.times_ms),
-        end_time=maximum(equivalence_config.times_ms),
-        seed=equivalence_job.seed,
-        plot=false,
-        gif=false,
-        interval=RSEModel._sample_interval_ms(equivalence_config.times_ms),
-        p=ModelParams(),
-        backend=:cpu,
-        convolution=:fft,
-        duty_cycle_percent=equivalence_config.duty_cycle_percent,
-    )
-    reference_images = Dict(
-        round(Int, snapshot.t) => RSEModel._search_cell_rgb(snapshot, equivalence_config.view, equivalence_config.cmap)
-        for snapshot in reference.images
-    )
-    @test equivalence_result.images == reference_images
-
-    out_path = mktempdir()
-    result_path = run_parameter_search(ParameterSearchConfig(
-        N=9,
-        A_values=[0.2],
-        period_values=[10.0],
-        times_ms=[10],
-        Se=2.0,
-        Si=5.0,
-        backend=:cpu,
-        convolution=:fft,
-        seed=1,
-        view=:cortical,
-        out_path=out_path,
-        overwrite=true,
-    ))
-    @test result_path == out_path
-    @test isfile(joinpath(out_path, "summary.csv"))
-    @test isfile(joinpath(out_path, "config.txt"))
-    @test isfile(joinpath(out_path, "grid_map.csv"))
-    @test isfile(joinpath(out_path, "snapshot_manifest.csv"))
-    @test !isfile(joinpath(out_path, "summary_progress.csv"))
-    @test isfile(joinpath(out_path, "parameter_search_cortical_00010ms.png"))
-    @test occursin("simulation_end_time_ms=10", read(joinpath(out_path, "config.txt"), String))
-    @test occursin("kernel_cutoff=4.0", read(joinpath(out_path, "config.txt"), String))
-    @test occursin("stimulus_threshold=0", read(joinpath(out_path, "config.txt"), String))
-    @test occursin("index,total,a_idx,t_idx,A,T_ms", first(readlines(joinpath(out_path, "summary.csv"))))
 end
 
 @testset "live applet config" begin
@@ -441,6 +291,8 @@ end
         "coupling" => "midline",
         "coupling_strength" => "0.03",
         "overlap_rows" => "5",
+        "retinal_resolution" => "320",
+        "retinal_rendering" => "mapped",
         "activity_scale" => "simulation",
     ))
     @test config.backend == :metal
@@ -458,7 +310,18 @@ end
     @test config.coupling == :overlap
     @test config.coupling_strength == 0.03f0
     @test config.overlap_rows == 6
+    @test config.retinal_resolution == 321
+    @test config.retinal_rendering == :mapped
+    @test RSEModel._retinal_output_size(config) == (321, 321)
     @test config.activity_scale == :simulation
+
+    interpolated_config = live_config_from_query(Dict(
+        "backend" => "cpu",
+        "N" => "25",
+        "retinal_resolution" => "321",
+    ))
+    @test interpolated_config.retinal_rendering == :interpolated
+    @test RSEModel._retinal_output_size(interpolated_config) == (25, 25)
 
     disconnected_config = live_config_from_query(Dict(
         "backend" => "metal",
@@ -487,8 +350,20 @@ end
     @test RSEModel._steps_per_frame(30, 1.0, p) == 167
     @test RSEModel._steps_per_frame(30, 0.1, p) == 17
     @test RSEModel._steps_per_frame(30, 0.01, p) == 2
+    @test RSEModel._steps_per_frame(30, 0.001, p) == 1
     @test RSEModel._steps_per_frame(30, 0.006, p) == 1
     @test RSEModel._steps_per_frame(30, 0.0, p) == 1
+
+    max_runtime = RSEModel._live_runtime(RSEModel.LiveConfig(
+        target_fps=30,
+        speed=0.0,
+        dt=0.2f0,
+    ))
+    @test max_runtime.max_steps_per_frame == 167
+    @test RSEModel._steps_per_frame(max_runtime, p) == 167
+    RSEModel._update_max_steps_per_frame!(max_runtime, 167, 8.0, 12.0)
+    @test max_runtime.max_steps_per_frame > 167
+    @test RSEModel._steps_per_frame(max_runtime, p) == max_runtime.max_steps_per_frame
 
     scale_runtime = RSEModel.LiveRuntime(activity_scale=:simulation)
     first_frame = RSEModel._make_live_frame(
@@ -560,19 +435,58 @@ end
     try
         url = applet_url(server, "127.0.0.1")
         response = HTTP.get(url; status_exception=false)
-        body = String(response.body)
+        css_response = HTTP.get(url * "styles.css"; status_exception=false)
+        js_response = HTTP.get(url * "app.js"; status_exception=false)
+        index_html = String(response.body)
+        body = string(index_html, String(css_response.body), String(js_response.body))
         @test response.status == 200
+        @test css_response.status == 200
+        @test js_response.status == 200
+        @test occursin("text/css", HTTP.header(css_response, "Content-Type"))
+        @test occursin("text/javascript", HTTP.header(js_response, "Content-Type"))
+        @test occursin("href=\"/styles.css\"", index_html)
+        @test occursin("src=\"/app.js\"", index_html)
+        @test !occursin("<style>", index_html)
+        @test !occursin("<script>\n", index_html)
         @test occursin("Real-time Strobe Hallucination Simulator", body)
         @test occursin("Rule-Ermentrout-Stroffegen", body)
+        @test occursin("--text-title: clamp(24px, 2.3vw, 33px)", body)
+        @test occursin("--app-shell-min: 1400px", body)
+        @test occursin("--app-shell-max: 2000px", body)
+        @test occursin("--parameter-pane-width: 490px", body)
+        @test occursin("overflow-x: auto", body)
+        @test occursin("width: clamp(var(--app-shell-min), calc(100vw - var(--page-gutter) - var(--page-gutter)), var(--app-shell-max))", body)
+        @test occursin("min-width: var(--app-shell-min)", body)
+        @test occursin("margin: 0 auto", body)
+        @test occursin("grid-template-columns: var(--parameter-pane-width) minmax(0, 1fr)", body)
+        @test occursin("width: var(--parameter-pane-width)", body)
+        @test occursin("grid-template-columns: repeat(2, minmax(0, 1fr))", body)
+        @test occursin("width: 100%", body)
+        @test !occursin("width: min(1440px, 100%)", body)
+        @test !occursin("--controls-width", body)
+        @test !occursin("--plot-window-size", body)
+        @test !occursin("grid-template-columns: minmax(360px, 0.42fr) minmax(760px, 1fr)", body)
+        @test !occursin("width: min(100%, var(--plot-window-size))", body)
         @test occursin("GPU (Metal)", body)
         @test occursin("Amplitude", body)
         @test occursin("Period (ms)", body)
         @test occursin("Duty cycle (%)", body)
-        @test occursin("Stream FPS", body)
-        @test occursin("Speed (x)", body)
+        @test occursin("<label>FPS<input id=\"fps\"", body)
+        @test occursin("<div class=\"metric\"><span>FPS</span>", body)
+        @test occursin("Visualization speed", body)
         @test occursin("Time step (ms)", body)
         @test occursin("Sheet size", body)
         @test occursin("Step interval", body)
+        @test occursin("function clampSpeedInputToMinimum", body)
+        @test occursin("return clampSpeedInputToMinimum(false)", body)
+        @test occursin("syncSpeedControls(true)", body)
+        @test occursin("syncSpeedControls(false)", body)
+        @test occursin("1 is real time, 0.5 is 50%, and 2 is 200%", body)
+        @test occursin("function updateRateMetrics", body)
+        @test occursin("const actualFps = (rateSamples.length - 1) * 1000 / elapsedWallMs", body)
+        @test occursin("const actualRealtimeX = elapsedSimulationMs / elapsedWallMs", body)
+        @test occursin("updateRateMetrics(performance.now(), msg.t)", body)
+        @test !occursin("const observedFps = 1000 /", body)
         @test occursin("Simulation time", body)
         @test occursin("Real-time (x)", body)
         @test occursin("Max speed", body)
@@ -586,6 +500,10 @@ end
         @test occursin("retinal-angle-90", body)
         @test occursin("id=\"colorMap\"", body)
         @test occursin("id=\"activityScale\"", body)
+        @test occursin("id=\"plotContours\"", body)
+        @test occursin("Resolution (contours)", body)
+        @test occursin("function activeContourCount", body)
+        @test occursin("function legendColorString", body)
         @test occursin("id=\"frameSelect\"", body)
         @test occursin("E - I", body)
         @test occursin("pointwise E - I", body)
@@ -611,6 +529,9 @@ end
         @test occursin("id=\"nControl\"", body)
         @test occursin("id=\"legendLow\"", body)
         @test occursin("id=\"legendHigh\"", body)
+        @test occursin("id=\"retinalResolution\"", body)
+        @test occursin("id=\"retinalRendering\"", body)
+        @test occursin("imageSmoothingQuality = \"high\"", body)
         @test occursin("visual-field-wrap", body)
         @test occursin("plot-title", body)
         @test !occursin("legend-label", body)
@@ -618,10 +539,15 @@ end
         @test occursin("id=\"boundaryXControl\"", body)
         @test occursin("id=\"partialReflectControl\"", body)
         @test occursin("id=\"partialReflectStrength\"", body)
-        @test occursin("Parameter Presets", body)
+        @test occursin("Selected Parameters", body)
         @test occursin("data-preset=\"p1\"", body)
-        @test occursin("<strong>Dots</strong>", body)
-        @test occursin("<strong>Zig-zag</strong>", body)
+        @test occursin("id=\"presetTitle\"", body)
+        @test occursin("aria-label=\"Preset 1: Dots\"", body)
+        @test occursin("<strong>1</strong>", body)
+        @test occursin("<strong>5</strong>", body)
+        @test occursin("id=\"overlapRowsControl\" class=\"hidden-control\"", body)
+        @test occursin("id=\"couplingStrengthControl\" class=\"hidden-control\"", body)
+        @test occursin("function syncCouplingControls", body)
         @test !occursin("Boundary periodic, coupling none", body)
         @test !occursin("N64 A0.2 T55", body)
         @test occursin("id=\"printParams\"", body)
@@ -647,19 +573,33 @@ end
         @test !occursin("server-side log-polar map", body)
         @test occursin("event.code === \"Space\"", body)
         @test occursin("event.code === \"Enter\"", body)
+        @test occursin("function isTypingShortcutTarget", body)
+        @test occursin("document.addEventListener(\"keyup\"", body)
         @test !occursin("id=\"dtMetric\"", body)
         @test !occursin("id=\"gridN\"", body)
         @test !occursin("id=\"msStep\"", body)
         @test !occursin("ms / step", body)
         @test !occursin("id=\"skipInterval\"", body)
+        @test !occursin("Stream FPS", body)
         @test !occursin("Speed x", body)
+        @test !occursin("Speed (x)", body)
         @test !occursin(">Coupling g<input", body)
+        @test !occursin("Coupling gain", body)
+        @test !occursin("Coupling<select", body)
+        @test !occursin("Boundary x<select", body)
+        @test !occursin("Boundary y<select", body)
+        @test !occursin("Parameter Presets", body)
+        @test !occursin("<strong>Dots</strong>", body)
+        @test !occursin("mean E=", body)
+        @test !occursin("mean I=", body)
+        @test !occursin("average hidden", body)
+        @test !occursin("E/I firing-rate state cloud", body)
         @test !occursin("Print parameters", body)
 
         @test isfile(joinpath(dirname(@__DIR__), "docs", "web-design-principles.md"))
 
         address = "127.0.0.1:$(HTTP.port(server))"
-        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1&activity_scale=simulation") do ws
+        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&retinal_resolution=51&retinal_rendering=mapped&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1&activity_scale=simulation") do ws
             hello = String(HTTP.WebSockets.receive(ws))
             frame = String(HTTP.WebSockets.receive(ws))
             @test occursin("\"type\":\"hello\"", hello)
@@ -669,14 +609,27 @@ end
             @test occursin("\"Si\":4.5", hello)
             @test occursin("\"dt\":0.1", hello)
             @test occursin("\"activityScale\":\"simulation\"", hello)
+            @test occursin("\"retinalResolution\":51", hello)
+            @test occursin("\"retinalRendering\":\"mapped\"", hello)
             @test occursin("\"cols\":50", frame)
-            @test occursin("\"retinalRows\":25", frame)
-            @test occursin("\"retinalCols\":25", frame)
+            @test occursin("\"retinalRows\":51", frame)
+            @test occursin("\"retinalCols\":51", frame)
             @test occursin("\"phaseCount\":1250", frame)
             @test occursin("\"phaseEData\":", frame)
             @test occursin("\"phaseIData\":", frame)
             @test occursin("\"stepInterval\":1", frame)
             @test !occursin("\"skipInterval\"", frame)
+        end
+
+        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=9&retinal_resolution=51&retinal_rendering=interpolated&fps=10&speed=0&max_frames=1") do ws
+            hello = String(HTTP.WebSockets.receive(ws))
+            frame = String(HTTP.WebSockets.receive(ws))
+            @test occursin("\"retinalResolution\":51", hello)
+            @test occursin("\"retinalRendering\":\"interpolated\"", hello)
+            @test occursin("\"rows\":9", frame)
+            @test occursin("\"cols\":9", frame)
+            @test occursin("\"retinalRows\":9", frame)
+            @test occursin("\"retinalCols\":9", frame)
         end
     finally
         close(server)

@@ -1,6 +1,2 @@
 .DS_Store
-__pycache__/
-.ipynb_checkpoints
-outputs_400x400/
 outputs/
-src/image_editor.py
