@@ -314,8 +314,10 @@ end
     @test config.retinal_rendering == :mapped
     @test RSEModel._retinal_output_size(config) == (321, 321)
     @test config.activity_scale == :simulation
+    @test live_config_from_query(Dict("backend" => "cpu", "seed" => "1")).seed == 1
+    @test live_config_from_query(Dict("backend" => "cpu", "seed" => "999")).seed == 999
     @test_throws ArgumentError live_config_from_query(Dict("backend" => "cpu", "seed" => "0"))
-    @test_throws ArgumentError live_config_from_query(Dict("backend" => "cpu", "seed" => "10000"))
+    @test_throws ArgumentError live_config_from_query(Dict("backend" => "cpu", "seed" => "1000"))
 
     interpolated_config = live_config_from_query(Dict(
         "backend" => "cpu",
@@ -551,7 +553,7 @@ end
         @test occursin("fastN: false", body)
         @test occursin("el.checked = Boolean(value)", body)
         @test occursin("function renderPresetButtons", body)
-        @test occursin("id=\"seed\" type=\"number\" min=\"1\" max=\"9999\"", body)
+        @test occursin("id=\"seed\" type=\"number\" min=\"1\" max=\"999\"", body)
         @test occursin("id=\"randomizeSeed\"", body)
         @test occursin("Randomize seed on restart", body)
         @test occursin("function randomSeedValue", body)

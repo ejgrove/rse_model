@@ -163,16 +163,16 @@ function activeContourCount() {
 
 function randomSeedValue() {
   const values = new Uint32Array(1);
-  const limit = Math.floor(0x100000000 / 9999) * 9999;
+  const limit = Math.floor(0x100000000 / 999) * 999;
   do {
     crypto.getRandomValues(values);
   } while (values[0] >= limit);
-  return 1 + values[0] % 9999;
+  return 1 + values[0] % 999;
 }
 
 function normalizedSeedValue() {
   const value = Math.round(Number(els.seed.value));
-  const seed = Number.isFinite(value) ? Math.max(1, Math.min(9999, value)) : randomSeedValue();
+  const seed = Number.isFinite(value) ? Math.max(1, Math.min(999, value)) : randomSeedValue();
   els.seed.value = String(seed);
   return seed;
 }
