@@ -49,7 +49,9 @@ Open `http://127.0.0.1:8088/`. Available server options are:
 ```
 
 The simulation starts automatically. `Space` pauses or resumes it, and `Enter`
-resets the model with the current parameters.
+resets the model with the current parameters. Seeds are integers from 1 to
+9,999. When `Randomize seed on restart` is selected, Reset and Enter generate a
+new seed; choosing a preset first runs its saved seed from `data/rse_params.xlsx`.
 
 ## App Behavior
 
@@ -91,6 +93,7 @@ src/RetinalMapping.jl     Cortical-to-retinal transforms
 src/Kernels.jl            Gaussian kernel construction
 src/Grid.jl               Odd and FFT-friendly grid sizing
 src/Params.jl             Model parameter definition
+data/rse_params.xlsx      Source table for the named parameter presets
 web/index.html            App document structure
 web/styles.css            App visual design
 web/app.js                Browser rendering and controls

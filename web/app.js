@@ -51,10 +51,12 @@ const els = {
   fastN: document.getElementById("fastN"),
   fastNControl: document.getElementById("fastNControl"),
   seed: document.getElementById("seed"),
+  randomizeSeed: document.getElementById("randomizeSeed"),
   pausePlay: document.getElementById("pausePlay"),
   reset: document.getElementById("reset"),
   printParams: document.getElementById("printParams"),
   paramOutput: document.getElementById("paramOutput"),
+  presetGrid: document.getElementById("presetGrid"),
   presetTitle: document.getElementById("presetTitle"),
   status: document.getElementById("status"),
   simTime: document.getElementById("simTime"),
@@ -82,59 +84,47 @@ const els = {
   legendHigh: document.getElementById("legendHigh")
 };
 
-const presets = {
-  default: {
-    label: "Dots",
-    values: {
-      boundaryX: "periodic", boundaryY: "periodic", boundary: "edge",
-      coupling: "off", kernelCutoff: 3, dt: 0.2,
-      couplingStrength: 0.02, overlapRows: 6
-    }
-  },
-  p1: {
-    label: "Zig-zag",
-    values: {
-      fieldGeometry: "square", n: 64, amp: 0.2, period: 55, duty: 50,
-      se: 2, si: 5, boundaryX: "periodic", boundaryY: "periodic",
-      coupling: "off", kernelCutoff: 3, dt: 0.2,
-      couplingStrength: 0.02, overlapRows: 6
-    }
-  },
-  p2: {
-    label: "Square",
-    values: {
-      fieldGeometry: "square", n: 81, amp: 0.7, period: 120, duty: 50,
-      se: 2, si: 5, boundaryX: "periodic", boundaryY: "periodic",
-      coupling: "off", kernelCutoff: 3, dt: 0.2,
-      couplingStrength: 0.02, overlapRows: 6
-    }
-  },
-  p3: {
-    label: "Lines + dots",
-    values: {
-      fieldGeometry: "square", n: 81, amp: 0.5, period: 125, duty: 50,
-      se: 2.5, si: 6.875, boundaryX: "periodic", boundaryY: "periodic",
-      coupling: "off", kernelCutoff: 3, dt: 0.2,
-      couplingStrength: 0.02, overlapRows: 6
-    }
-  },
-  p4: {
-    label: "Hex rings",
-    values: {
-      fieldGeometry: "square", n: 81, amp: 0.5, period: 115, duty: 50,
-      se: 2.5, si: 6.875, boundaryX: "periodic", boundaryY: "periodic",
-      coupling: "off", kernelCutoff: 3, dt: 0.2,
-      couplingStrength: 0.02, overlapRows: 6
-    }
-  }
+const presetDefaults = {
+  fieldGeometry: "square",
+  boundaryX: "periodic",
+  boundaryY: "periodic",
+  boundary: "edge",
+  coupling: "off",
+  fastN: false,
+  kernelCutoff: 3,
+  dt: 0.2,
+  couplingStrength: 0.02,
+  overlapRows: 6
 };
-const presetKeys = ["default", "p1", "p2", "p3", "p4"];
+
+// Source: data/rse_params.xlsx, Sheet1 rows 2-15.
+const presetRows = [
+  { label: "Stripes", values: { n: 121, amp: 0.7, period: 55, duty: 20.5, se: 2, si: 5, seed: 42 } },
+  { label: "Dot square grid", values: { n: 81, amp: 0.7, period: 120, duty: 20.5, se: 2, si: 5, seed: 5 } },
+  { label: "Dots", values: { n: 121, amp: 0.7, period: 115, duty: 20.5, se: 2, si: 5, seed: 4 } },
+  { label: "Dots in line (square spiral?)", values: { n: 81, amp: 0.7, period: 120, duty: 20.5, se: 2, si: 5, seed: 4 } },
+  { label: "Stripes", values: { n: 81, amp: 0.7, period: 120, duty: 50, se: 2, si: 5, seed: 42 } },
+  { label: "Dots & zig-zags", values: { n: 81, amp: 0.5, period: 125, duty: 50, se: 2, si: 6, seed: 2 } },
+  { label: "Unstable square grid", values: { n: 121, amp: 0.7, period: 115, duty: 50, se: 2.5, si: 6.5, seed: 2 } },
+  { label: "Waves of dots", values: { n: 81, amp: 0.25, period: 105, duty: 50, se: 2.5, si: 6.875, seed: 42 } },
+  { label: "Dots & stripes 1", values: { n: 121, amp: 0.25, period: 105, duty: 50, se: 2.5, si: 6.875, seed: 42 } },
+  { label: "Dot honeycomb", values: { n: 121, amp: 0.5, period: 115, duty: 50, se: 2.5, si: 6.875, seed: 4 } },
+  { label: "Cross hairs grid", values: { n: 81, amp: 0.5, period: 115, duty: 50, se: 2.5, si: 6.875, seed: 8 } },
+  { label: "Two dot honeycomb", values: { n: 121, amp: 0.5, period: 125, duty: 50, se: 2.5, si: 6.875, seed: 8 } },
+  { label: "Dots & stripes 2", values: { n: 121, amp: 0.5, period: 125, duty: 50, se: 2.5, si: 6.875, seed: 11 } },
+  { label: "Rectangular checkerboard", values: { n: 81, amp: 0.25, period: 85, duty: 50, se: 2.5, si: 7.5, seed: 2 } }
+];
+const presets = Object.fromEntries(presetRows.map((preset, index) => [
+  `p${index + 1}`,
+  { label: preset.label, values: { ...presetDefaults, ...preset.values } }
+]));
+const presetKeys = Object.keys(presets);
 const retinalInterpolationCanvas = document.createElement("canvas");
 
 let socket = null;
 let paused = false;
 let resetting = false;
-let activePresetKey = "default";
+let activePresetKey = "p1";
 let streamToken = 0;
 let rateSamples = [];
 let lastDisplayFrame = null;
@@ -169,6 +159,28 @@ function colorStopString(stops = activeColorStops()) {
 
 function activeContourCount() {
   return Math.max(2, Math.min(256, Math.round(Number(els.plotContours.value) || 256)));
+}
+
+function randomSeedValue() {
+  const values = new Uint32Array(1);
+  const limit = Math.floor(0x100000000 / 9999) * 9999;
+  do {
+    crypto.getRandomValues(values);
+  } while (values[0] >= limit);
+  return 1 + values[0] % 9999;
+}
+
+function normalizedSeedValue() {
+  const value = Math.round(Number(els.seed.value));
+  const seed = Number.isFinite(value) ? Math.max(1, Math.min(9999, value)) : randomSeedValue();
+  els.seed.value = String(seed);
+  return seed;
+}
+
+function prepareSeedForRestart(randomize = true) {
+  const seed = randomize && els.randomizeSeed.checked ? randomSeedValue() : normalizedSeedValue();
+  els.seed.value = String(seed);
+  return seed;
 }
 
 function palette(v) {
@@ -1126,7 +1138,7 @@ function streamParams() {
   params.set("Se", els.se.value);
   params.set("Si", els.si.value);
   params.set("dt", els.dt.value);
-  if (els.seed.value.trim()) params.set("seed", els.seed.value.trim());
+  params.set("seed", String(normalizedSeedValue()));
   return params;
 }
 
@@ -1156,7 +1168,8 @@ function collectParameterSnapshot() {
       sigma_i: Number(els.si.value) || 0,
       time_step_ms: Number(els.dt.value) || 0,
       kernel_cutoff: Number(els.kernelCutoff.value) || 3,
-      seed: els.seed.value.trim() || null
+      seed: normalizedSeedValue(),
+      randomize_seed_on_restart: els.randomizeSeed.checked
     }
   };
 }
@@ -1169,7 +1182,11 @@ function printParameters(label = "Current parameters") {
 function setControlValue(id, value) {
   const el = els[id];
   if (!el || value === undefined) return;
-  el.value = String(value);
+  if (el.type === "checkbox") {
+    el.checked = Boolean(value);
+  } else {
+    el.value = String(value);
+  }
 }
 
 function presetDisplay(key) {
@@ -1197,6 +1214,27 @@ function setActivePreset(key) {
   setPresetTitle(key);
 }
 
+function renderPresetButtons() {
+  const buttons = presetKeys.map((key, index) => {
+    const button = document.createElement("button");
+    const number = document.createElement("strong");
+    button.type = "button";
+    button.className = "preset-button";
+    button.dataset.preset = key;
+    button.setAttribute("aria-label", `Preset ${index + 1}: ${presets[key].label}`);
+    button.setAttribute("aria-pressed", "false");
+    number.textContent = String(index + 1);
+    button.append(number);
+    button.addEventListener("mouseenter", () => setPresetTitle(key));
+    button.addEventListener("focus", () => setPresetTitle(key));
+    button.addEventListener("mouseleave", () => setPresetTitle(activePresetKey));
+    button.addEventListener("blur", () => setPresetTitle(activePresetKey));
+    button.addEventListener("click", () => applyPreset(key));
+    return button;
+  });
+  els.presetGrid.replaceChildren(...buttons);
+}
+
 function applyPreset(key) {
   const preset = presets[key];
   if (!preset) return;
@@ -1213,7 +1251,7 @@ function applyPreset(key) {
   drawFieldGraph();
   setActivePreset(key);
   printParameters(`Applied preset: ${preset.label}`);
-  resetStream();
+  resetStream({ randomizeSeed: false });
 }
 
 function syncGeometryControls() {
@@ -1344,6 +1382,7 @@ function startStream() {
       drawStimulusGraph(0);
       const speedText = msg.speed === 0 ? "max" : formatSpeed(msg.speed);
       if (msg.activityScale) els.activityScale.value = msg.activityScale;
+      if (msg.seed !== null && msg.seed !== undefined) els.seed.value = String(msg.seed);
       if (msg.retinalResolution) els.retinalResolution.value = String(msg.retinalResolution);
       if (msg.retinalRendering) els.retinalRendering.value = msg.retinalRendering;
       const scaleText = msg.activityScale === "simulation" ? "simulation min/max" : "frame min/max";
@@ -1351,7 +1390,7 @@ function startStream() {
       const boundaryText = msg.boundaryX === msg.boundaryY ? `boundary ${msg.boundaryX}` : `boundary x ${msg.boundaryX}, y ${msg.boundaryY}`;
       const reflectText = (msg.boundaryX === "partial_reflect" || msg.boundaryY === "partial_reflect") ? `, reflect gain ${msg.partialReflectStrength}` : "";
       const retinalText = msg.retinalRendering === "interpolated" ? "interpolated retinal rendering" : "mapped retinal rendering";
-      els.status.textContent = `Streaming ${msg.backend}/${msg.conv}, ${boundaryText}${reflectText}${geometryText}, \u03c3\u2091=${msg.Se}, \u03c3\u1d62=${msg.Si}, time step ${msg.dt} ms, stream ${msg.fps} fps, simulation speed ${speedText}, ${retinalText}, ${scaleText}, ${duty}${coupling}.`;
+      els.status.textContent = `Streaming ${msg.backend}/${msg.conv}, ${boundaryText}${reflectText}${geometryText}, \u03c3\u2091=${msg.Se}, \u03c3\u1d62=${msg.Si}, seed ${msg.seed}, time step ${msg.dt} ms, stream ${msg.fps} fps, simulation speed ${speedText}, ${retinalText}, ${scaleText}, ${duty}${coupling}.`;
       return;
     }
     if (msg.type === "done") {
@@ -1418,7 +1457,8 @@ function stopStream() {
   return closingSocket;
 }
 
-function resetStream() {
+function resetStream({ randomizeSeed = true } = {}) {
+  prepareSeedForRestart(randomizeSeed);
   if (resetFallbackTimer) clearTimeout(resetFallbackTimer);
   resetting = true;
   resetMetrics();
@@ -1454,6 +1494,7 @@ function resetStream() {
 
 function togglePausePlay() {
   if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+    prepareSeedForRestart();
     startStream();
     return;
   }
@@ -1485,7 +1526,7 @@ function isTypingShortcutTarget(element) {
 // Event wiring and initial render
 
 els.pausePlay.addEventListener("click", togglePausePlay);
-els.reset.addEventListener("click", resetStream);
+els.reset.addEventListener("click", () => resetStream());
 els.fieldGeometry.addEventListener("change", () => {
   applyGeometryDefaults();
   resetStream();
@@ -1521,13 +1562,6 @@ els.frameSelect.addEventListener("change", () => {
 [els.amp, els.period, els.duty].forEach((el) => {
   el.addEventListener("input", drawPhasePlane);
   el.addEventListener("change", drawPhasePlane);
-});
-document.querySelectorAll("[data-preset]").forEach((button) => {
-  button.addEventListener("mouseenter", () => setPresetTitle(button.dataset.preset));
-  button.addEventListener("focus", () => setPresetTitle(button.dataset.preset));
-  button.addEventListener("mouseleave", () => setPresetTitle(activePresetKey));
-  button.addEventListener("blur", () => setPresetTitle(activePresetKey));
-  button.addEventListener("click", () => applyPreset(button.dataset.preset));
 });
 els.printParams.addEventListener("click", () => printParameters());
 els.colorMap.addEventListener("change", () => {
@@ -1597,6 +1631,7 @@ window.addEventListener("resize", () => {
 syncSpeedControls();
 syncReflectControl();
 syncCouplingControls();
+renderPresetButtons();
 setActivePreset(activePresetKey);
 drawKernelGraph();
 drawFieldGraph();

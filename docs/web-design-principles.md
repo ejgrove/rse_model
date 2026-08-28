@@ -58,6 +58,7 @@ This guide is the reference for future changes to the real-time applet UI.
 - Use `Visualization speed` for the simulation-playback speed control, and `FPS` for the stream frame rate.
 - In the coupling section, use `Type` for the coupling mode and `Strength` for the overlap coupling gain.
 - Keep selected-parameter preset buttons numeric; show the preset title in the adjacent title line on hover, focus, or selection.
+- Preserve a selected preset's documented seed on initial application. Randomize the seed on later restarts only when the corresponding checkbox is enabled.
 - Keep buttons short and action-oriented: `Pause`, `Reset`, `Print settings`.
 - Status text should be sentence case and should describe current state, not implementation internals unless useful.
 - If a control is hidden because it is not relevant, avoid mentioning it elsewhere on the page.

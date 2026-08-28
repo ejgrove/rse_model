@@ -239,7 +239,7 @@ details.control-section[open] > summary::after {
 
 .preset-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -341,6 +341,12 @@ input[type="checkbox"] {
   gap: 7px;
   padding: 4px 0 0;
   color: var(--ink);
+}
+
+.implementation-checks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
 }
 
 .button-row {

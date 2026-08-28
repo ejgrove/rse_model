@@ -314,6 +314,8 @@ end
     @test config.retinal_rendering == :mapped
     @test RSEModel._retinal_output_size(config) == (321, 321)
     @test config.activity_scale == :simulation
+    @test_throws ArgumentError live_config_from_query(Dict("backend" => "cpu", "seed" => "0"))
+    @test_throws ArgumentError live_config_from_query(Dict("backend" => "cpu", "seed" => "10000"))
 
     interpolated_config = live_config_from_query(Dict(
         "backend" => "cpu",
@@ -540,11 +542,22 @@ end
         @test occursin("id=\"partialReflectControl\"", body)
         @test occursin("id=\"partialReflectStrength\"", body)
         @test occursin("Selected Parameters", body)
-        @test occursin("data-preset=\"p1\"", body)
+        @test occursin("id=\"presetGrid\"", body)
         @test occursin("id=\"presetTitle\"", body)
-        @test occursin("aria-label=\"Preset 1: Dots\"", body)
-        @test occursin("<strong>1</strong>", body)
-        @test occursin("<strong>5</strong>", body)
+        @test occursin("const presetRows = [", body)
+        @test occursin("label: \"Stripes\", values: { n: 121, amp: 0.7, period: 55", body)
+        @test occursin("label: \"Rectangular checkerboard\"", body)
+        @test occursin("seed: 11", body)
+        @test occursin("fastN: false", body)
+        @test occursin("el.checked = Boolean(value)", body)
+        @test occursin("function renderPresetButtons", body)
+        @test occursin("id=\"seed\" type=\"number\" min=\"1\" max=\"9999\"", body)
+        @test occursin("id=\"randomizeSeed\"", body)
+        @test occursin("Randomize seed on restart", body)
+        @test occursin("function randomSeedValue", body)
+        @test occursin("function normalizedSeedValue", body)
+        @test occursin("function resetStream({ randomizeSeed = true } = {})", body)
+        @test occursin("resetStream({ randomizeSeed: false })", body)
         @test occursin("id=\"overlapRowsControl\" class=\"hidden-control\"", body)
         @test occursin("id=\"couplingStrengthControl\" class=\"hidden-control\"", body)
         @test occursin("function syncCouplingControls", body)
@@ -597,9 +610,10 @@ end
         @test !occursin("Print parameters", body)
 
         @test isfile(joinpath(dirname(@__DIR__), "docs", "web-design-principles.md"))
+        @test isfile(joinpath(dirname(@__DIR__), "data", "rse_params.xlsx"))
 
         address = "127.0.0.1:$(HTTP.port(server))"
-        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&retinal_resolution=51&retinal_rendering=mapped&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1&activity_scale=simulation") do ws
+        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&retinal_resolution=51&retinal_rendering=mapped&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1&seed=42&activity_scale=simulation") do ws
             hello = String(HTTP.WebSockets.receive(ws))
             frame = String(HTTP.WebSockets.receive(ws))
             @test occursin("\"type\":\"hello\"", hello)
@@ -608,6 +622,7 @@ end
             @test occursin("\"Se\":1.5", hello)
             @test occursin("\"Si\":4.5", hello)
             @test occursin("\"dt\":0.1", hello)
+            @test occursin("\"seed\":42", hello)
             @test occursin("\"activityScale\":\"simulation\"", hello)
             @test occursin("\"retinalResolution\":51", hello)
             @test occursin("\"retinalRendering\":\"mapped\"", hello)

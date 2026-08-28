@@ -122,6 +122,9 @@ function normalize_live_config(config::LiveConfig)
     config.gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
     config.kernel_cutoff > 0 || throw(ArgumentError("kernel_cutoff must be positive."))
     config.max_frames >= 0 || throw(ArgumentError("max_frames must be non-negative."))
+    if config.seed !== nothing
+        1 <= config.seed <= 9999 || throw(ArgumentError("seed must be between 1 and 9999."))
+    end
     0 <= config.partial_reflect_strength <= 1 ||
         throw(ArgumentError("partial_reflect_strength must be between 0 and 1."))
     config.coupling_strength >= 0 || throw(ArgumentError("coupling_strength must be non-negative."))
@@ -1142,6 +1145,7 @@ function _hello_json(config::LiveConfig)
         ",\"Se\":", _json_number(config.Se),
         ",\"Si\":", _json_number(config.Si),
         ",\"dt\":", _json_number(config.dt),
+        ",\"seed\":", _json_number(config.seed),
         ",\"kernelCutoff\":", _json_number(config.kernel_cutoff),
         ",\"boundaryX\":", _json_string(config.boundary_x),
         ",\"boundaryY\":", _json_string(config.boundary_y),

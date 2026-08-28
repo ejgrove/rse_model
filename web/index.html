@@ -33,14 +33,14 @@
         <div class="subsection-title">Strobe</div>
         <div class="control-grid triad">
           <label>Amplitude<input id="amp" type="number" min="0" step="0.05" value="0.7"></label>
-          <label>Period (ms)<input id="period" type="number" min="1" step="1" value="115"></label>
+          <label>Period (ms)<input id="period" type="number" min="1" step="1" value="55"></label>
           <label>Duty cycle (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
         </div>
         <div class="subsection-title">Neural field</div>
         <div class="control-grid triad">
           <label class="span-2">Field geometry<select id="fieldGeometry"><option value="square">Square</option><option value="double_sech">Double-sech V1</option></select></label>
           <label id="fieldDensityControl" class="hidden-control span-2">Field density<input id="fieldDensity" type="number" min="0.25" max="3" step="0.25" value="1"></label>
-          <label id="nControl">Sheet size<input id="n" type="number" min="5" step="2" value="81"></label>
+          <label id="nControl">Sheet size<input id="n" type="number" min="5" step="2" value="121"></label>
           <label><span>&sigma;<sub>e</sub></span><input id="se" type="number" min="0.1" step="0.05" value="2"></label>
           <label><span>&sigma;<sub>i</sub></span><input id="si" type="number" min="0.1" step="0.05" value="5"></label>
           <label>Time step (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
@@ -54,9 +54,12 @@
             <label>Backend<select id="backend"><option value="metal">GPU (Metal)</option><option value="cpu">CPU</option></select></label>
             <label>Convolution<select id="conv"><option value="separable">Separable</option><option value="fft">FFT</option></select></label>
             <label>Kernel cutoff<input id="kernelCutoff" type="number" min="0.5" max="6" step="0.25" value="3"></label>
-            <label>Seed<input id="seed" type="number" step="1" placeholder="optional"></label>
+            <label>Seed<input id="seed" type="number" min="1" max="9999" step="1" value="42"></label>
           </div>
-          <label id="fastNControl" class="check-row"><input id="fastN" type="checkbox" checked> Use FFT-friendly odd sheet size</label>
+          <div class="implementation-checks">
+            <label id="fastNControl" class="check-row"><input id="fastN" type="checkbox"> Use FFT-friendly odd sheet size</label>
+            <label class="check-row"><input id="randomizeSeed" type="checkbox" checked> Randomize seed on restart</label>
+          </div>
         </div>
       </details>
 
@@ -86,14 +89,8 @@
       <details class="control-section">
         <summary class="section-title">Selected Parameters</summary>
         <div class="control-section-body">
-          <div class="preset-grid">
-            <button class="preset-button active" data-preset="default" aria-label="Preset 1: Dots" aria-pressed="true"><strong>1</strong></button>
-            <button class="preset-button" data-preset="p1" aria-label="Preset 2: Zig-zag" aria-pressed="false"><strong>2</strong></button>
-            <button class="preset-button" data-preset="p2" aria-label="Preset 3: Square" aria-pressed="false"><strong>3</strong></button>
-            <button class="preset-button" data-preset="p3" aria-label="Preset 4: Lines and dots" aria-pressed="false"><strong>4</strong></button>
-            <button class="preset-button" data-preset="p4" aria-label="Preset 5: Hex rings" aria-pressed="false"><strong>5</strong></button>
-          </div>
-          <div id="presetTitle" class="preset-title">1. Dots</div>
+          <div id="presetGrid" class="preset-grid"></div>
+          <div id="presetTitle" class="preset-title">1. Stripes</div>
           <div class="section-actions">
             <button id="printParams" class="secondary">Print settings</button>
           </div>
