@@ -32,6 +32,8 @@ const els = {
   amp: document.getElementById("amp"),
   period: document.getElementById("period"),
   duty: document.getElementById("duty"),
+  ge: document.getElementById("ge"),
+  gi: document.getElementById("gi"),
   couplingStrength: document.getElementById("couplingStrength"),
   couplingStrengthControl: document.getElementById("couplingStrengthControl"),
   overlapRows: document.getElementById("overlapRows"),
@@ -43,6 +45,10 @@ const els = {
   retinalRendering: document.getElementById("retinalRendering"),
   se: document.getElementById("se"),
   si: document.getElementById("si"),
+  aee: document.getElementById("aee"),
+  aei: document.getElementById("aei"),
+  aie: document.getElementById("aie"),
+  aii: document.getElementById("aii"),
   dt: document.getElementById("dt"),
   fieldGeometry: document.getElementById("fieldGeometry"),
   fieldDensity: document.getElementById("fieldDensity"),
@@ -93,6 +99,12 @@ const presetDefaults = {
   fastN: false,
   kernelCutoff: 3,
   dt: 0.2,
+  ge: 1,
+  gi: 0,
+  aee: 10,
+  aei: 12,
+  aie: 8.5,
+  aii: 3,
   couplingStrength: 0.02,
   overlapRows: 6
 };
@@ -137,15 +149,26 @@ let streamStimulus = {
   duty: Number(els.duty.value) || 50
 };
 const meanFieldParams = {
-  Aee: 10.0,
-  Aei: 12.0,
-  Aie: 8.5,
-  Aii: 3.0,
   He: 2.0,
-  Hi: 3.5,
-  Ge: 1.0,
-  Gi: 0.0
+  Hi: 3.5
 };
+
+function numericControlValue(control, fallback) {
+  const value = Number(control.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function activeMeanFieldParams() {
+  return {
+    ...meanFieldParams,
+    Aee: numericControlValue(els.aee, 10),
+    Aei: numericControlValue(els.aei, 12),
+    Aie: numericControlValue(els.aie, 8.5),
+    Aii: numericControlValue(els.aii, 3),
+    Ge: numericControlValue(els.ge, 1),
+    Gi: numericControlValue(els.gi, 0)
+  };
+}
 
 // Formatting, color scales, and live visualization controls
 
@@ -940,7 +963,7 @@ function drawPhasePlane() {
     ctx.stroke();
   };
   const drawMeanFieldNullclines = (stim) => {
-    const p = meanFieldParams;
+    const p = activeMeanFieldParams();
     drawCurve((ue) => ({
       x: ue,
       y: (p.Aee * ue - p.He + p.Ge * stim - logit(ue)) / p.Aie
@@ -1133,10 +1156,16 @@ function streamParams() {
   params.set("A", els.amp.value);
   params.set("T", els.period.value);
   params.set("duty_cycle", els.duty.value);
+  params.set("Ge", els.ge.value);
+  params.set("Gi", els.gi.value);
   params.set("coupling_strength", els.couplingStrength.value);
   params.set("overlap_rows", els.overlapRows.value);
   params.set("Se", els.se.value);
   params.set("Si", els.si.value);
+  params.set("Aee", els.aee.value);
+  params.set("Aei", els.aei.value);
+  params.set("Aie", els.aie.value);
+  params.set("Aii", els.aii.value);
   params.set("dt", els.dt.value);
   params.set("seed", String(normalizedSeedValue()));
   return params;
@@ -1158,7 +1187,9 @@ function collectParameterSnapshot() {
     strobe: {
       amplitude: Number(els.amp.value) || 0,
       period_ms: Number(els.period.value) || 0,
-      duty_cycle_percent: Number(els.duty.value) || 0
+      duty_cycle_percent: Number(els.duty.value) || 0,
+      gain_e: numericControlValue(els.ge, 1),
+      gain_i: numericControlValue(els.gi, 0)
     },
     neural_field: {
       geometry: els.fieldGeometry.value,
@@ -1166,6 +1197,12 @@ function collectParameterSnapshot() {
       sheet_size: els.fieldGeometry.value === "double_sech" ? null : Number(els.n.value) || 0,
       sigma_e: Number(els.se.value) || 0,
       sigma_i: Number(els.si.value) || 0,
+      synaptic_weights: {
+        ee: numericControlValue(els.aee, 10),
+        ei: numericControlValue(els.aei, 12),
+        ie: numericControlValue(els.aie, 8.5),
+        ii: numericControlValue(els.aii, 3)
+      },
       time_step_ms: Number(els.dt.value) || 0,
       kernel_cutoff: Number(els.kernelCutoff.value) || 3,
       seed: normalizedSeedValue(),
@@ -1382,6 +1419,12 @@ function startStream() {
       drawStimulusGraph(0);
       const speedText = msg.speed === 0 ? "max" : formatSpeed(msg.speed);
       if (msg.activityScale) els.activityScale.value = msg.activityScale;
+      if (msg.Ge !== undefined) els.ge.value = String(msg.Ge);
+      if (msg.Gi !== undefined) els.gi.value = String(msg.Gi);
+      if (msg.Aee !== undefined) els.aee.value = String(msg.Aee);
+      if (msg.Aei !== undefined) els.aei.value = String(msg.Aei);
+      if (msg.Aie !== undefined) els.aie.value = String(msg.Aie);
+      if (msg.Aii !== undefined) els.aii.value = String(msg.Aii);
       if (msg.seed !== null && msg.seed !== undefined) els.seed.value = String(msg.seed);
       if (msg.retinalResolution) els.retinalResolution.value = String(msg.retinalResolution);
       if (msg.retinalRendering) els.retinalRendering.value = msg.retinalRendering;
@@ -1559,7 +1602,7 @@ els.frameSelect.addEventListener("change", () => {
 [els.phaseIncludeAverage].forEach((el) => {
   el.addEventListener("change", drawPhasePlane);
 });
-[els.amp, els.period, els.duty].forEach((el) => {
+[els.amp, els.period, els.duty, els.ge, els.gi, els.aee, els.aei, els.aie, els.aii].forEach((el) => {
   el.addEventListener("input", drawPhasePlane);
   el.addEventListener("change", drawPhasePlane);
 });

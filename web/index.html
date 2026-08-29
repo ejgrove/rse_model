@@ -36,6 +36,11 @@
           <label>Period (ms)<input id="period" type="number" min="1" step="1" value="55"></label>
           <label>Duty cycle (%)<input id="duty" type="number" min="1" max="99" step="0.5" value="20.5"></label>
         </div>
+        <div class="subsection-title">Stimulus gains</div>
+        <div class="control-grid">
+          <label><span>G<sub>e</sub></span><input id="ge" type="number" min="0" step="0.05" value="1" title="Strobe-input gain for the excitatory population."></label>
+          <label><span>G<sub>i</sub></span><input id="gi" type="number" min="0" step="0.05" value="0" title="Strobe-input gain for the inhibitory population."></label>
+        </div>
         <div class="subsection-title">Neural field</div>
         <div class="control-grid triad">
           <label class="span-2">Field geometry<select id="fieldGeometry"><option value="square">Square</option><option value="double_sech">Double-sech V1</option></select></label>
@@ -44,6 +49,13 @@
           <label><span>&sigma;<sub>e</sub></span><input id="se" type="number" min="0.1" step="0.05" value="2"></label>
           <label><span>&sigma;<sub>i</sub></span><input id="si" type="number" min="0.1" step="0.05" value="5"></label>
           <label>Time step (ms)<input id="dt" type="number" min="0.01" step="0.05" value="0.2"></label>
+        </div>
+        <div class="subsection-title">Synaptic weights</div>
+        <div class="control-grid">
+          <label><span>A<sub>ee</sub></span><input id="aee" type="number" min="0" step="0.1" value="10" title="Excitatory-to-excitatory connection weight."></label>
+          <label><span>A<sub>ei</sub></span><input id="aei" type="number" min="0" step="0.1" value="12" title="Excitatory-to-inhibitory connection weight."></label>
+          <label><span>A<sub>ie</sub></span><input id="aie" type="number" min="0" step="0.1" value="8.5" title="Inhibitory-to-excitatory connection-weight magnitude."></label>
+          <label><span>A<sub>ii</sub></span><input id="aii" type="number" min="0" step="0.1" value="3" title="Inhibitory-to-inhibitory connection-weight magnitude."></label>
         </div>
       </div>
 

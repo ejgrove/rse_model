@@ -283,8 +283,14 @@ end
         "speed" => "0",
         "seed" => "42",
         "duty_cycle" => "25",
+        "Ge" => "1.25",
+        "Gi" => "0.35",
         "Se" => "1.75",
         "Si" => "4.5",
+        "Aee" => "9.5",
+        "Aei" => "11.5",
+        "Aie" => "7.5",
+        "Aii" => "2.5",
         "dt" => "0.1",
         "boundary_x" => "edge",
         "boundary_y" => "zero",
@@ -302,8 +308,14 @@ end
     @test config.speed == 0
     @test config.seed == 42
     @test config.duty_cycle_percent == 25.0f0
+    @test config.Ge == 1.25f0
+    @test config.Gi == 0.35f0
     @test config.Se == 1.75f0
     @test config.Si == 4.5f0
+    @test config.Aee == 9.5f0
+    @test config.Aei == 11.5f0
+    @test config.Aie == 7.5f0
+    @test config.Aii == 2.5f0
     @test config.dt == 0.1f0
     @test config.boundary_x == :edge
     @test config.boundary_y == :zero
@@ -314,10 +326,19 @@ end
     @test config.retinal_rendering == :mapped
     @test RSEModel._retinal_output_size(config) == (321, 321)
     @test config.activity_scale == :simulation
+    model_params = RSEModel._live_model_params(config)
+    @test model_params.Ge == config.Ge
+    @test model_params.Gi == config.Gi
+    @test model_params.Aee == config.Aee
+    @test model_params.Aei == config.Aei
+    @test model_params.Aie == config.Aie
+    @test model_params.Aii == config.Aii
     @test live_config_from_query(Dict("backend" => "cpu", "seed" => "1")).seed == 1
     @test live_config_from_query(Dict("backend" => "cpu", "seed" => "999")).seed == 999
     @test_throws ArgumentError live_config_from_query(Dict("backend" => "cpu", "seed" => "0"))
     @test_throws ArgumentError live_config_from_query(Dict("backend" => "cpu", "seed" => "1000"))
+    @test_throws ArgumentError live_config_from_query(Dict("backend" => "cpu", "Aee" => "-1"))
+    @test_throws ArgumentError live_config_from_query(Dict("backend" => "cpu", "Gi" => "-0.1"))
 
     interpolated_config = live_config_from_query(Dict(
         "backend" => "cpu",
@@ -495,6 +516,14 @@ end
         @test occursin("Amplitude", body)
         @test occursin("Period (ms)", body)
         @test occursin("Duty cycle (%)", body)
+        @test occursin("Stimulus gains", body)
+        @test occursin("id=\"ge\"", body)
+        @test occursin("id=\"gi\"", body)
+        @test occursin("Synaptic weights", body)
+        @test occursin("id=\"aee\"", body)
+        @test occursin("id=\"aei\"", body)
+        @test occursin("id=\"aie\"", body)
+        @test occursin("id=\"aii\"", body)
         @test occursin("<label>FPS<input id=\"fps\"", body)
         @test occursin("<div class=\"metric\"><span>FPS</span>", body)
         @test occursin("Visualization speed", body)
@@ -541,6 +570,7 @@ end
         @test occursin("id=\"phaseInfo\"", body)
         @test occursin("id=\"phaseIncludeAverage\"", body)
         @test occursin("meanFieldParams", body)
+        @test occursin("function activeMeanFieldParams", body)
         @test occursin("drawMeanFieldNullclines", body)
         @test occursin("dUe/dt=0", body)
         @test occursin("dUi/dt=0", body)
@@ -636,7 +666,7 @@ end
         @test isfile(joinpath(dirname(@__DIR__), "data", "rse_params.xlsx"))
 
         address = "127.0.0.1:$(HTTP.port(server))"
-        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&retinal_resolution=51&retinal_rendering=mapped&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&dt=0.1&seed=42&activity_scale=simulation") do ws
+        HTTP.WebSockets.open("ws://$address/stream?backend=cpu&N=25&retinal_resolution=51&retinal_rendering=mapped&fps=10&speed=0&max_frames=1&coupling=overlap&overlap_rows=6&Se=1.5&Si=4.5&Aee=9.5&Aei=11.5&Aie=7.5&Aii=2.5&Ge=1.25&Gi=0.35&dt=0.1&seed=42&activity_scale=simulation") do ws
             hello = String(HTTP.WebSockets.receive(ws))
             frame = String(HTTP.WebSockets.receive(ws))
             @test occursin("\"type\":\"hello\"", hello)
@@ -644,6 +674,12 @@ end
             @test occursin("\"coupling\":\"overlap\"", hello)
             @test occursin("\"Se\":1.5", hello)
             @test occursin("\"Si\":4.5", hello)
+            @test occursin("\"Aee\":9.5", hello)
+            @test occursin("\"Aei\":11.5", hello)
+            @test occursin("\"Aie\":7.5", hello)
+            @test occursin("\"Aii\":2.5", hello)
+            @test occursin("\"Ge\":1.25", hello)
+            @test occursin("\"Gi\":0.35", hello)
             @test occursin("\"dt\":0.1", hello)
             @test occursin("\"seed\":42", hello)
             @test occursin("\"activityScale\":\"simulation\"", hello)

@@ -25,8 +25,14 @@ Base.@kwdef struct LiveConfig
     A::Float32 = 0.7f0
     period::Float32 = 115.0f0
     duty_cycle_percent::Union{Nothing,Float32} = Float32(duty_cycle_percent_from_threshold(ModelParams{Float32}().V))
+    Ge::Float32 = 1.0f0
+    Gi::Float32 = 0.0f0
     Se::Float32 = 2.0f0
     Si::Float32 = 5.0f0
+    Aee::Float32 = 10.0f0
+    Aei::Float32 = 12.0f0
+    Aie::Float32 = 8.5f0
+    Aii::Float32 = 3.0f0
     dt::Float32 = 0.2f0
     seed::Union{Nothing,Int} = nothing
     target_fps::Int = 30
@@ -120,6 +126,12 @@ function normalize_live_config(config::LiveConfig)
     end
     config.speed >= 0 || throw(ArgumentError("speed must be non-negative."))
     config.dt > 0 || throw(ArgumentError("dt must be positive."))
+    for (name, value) in (
+        ("Aee", config.Aee), ("Aei", config.Aei), ("Aie", config.Aie), ("Aii", config.Aii),
+        ("Ge", config.Ge), ("Gi", config.Gi),
+    )
+        isfinite(value) && value >= 0 || throw(ArgumentError("$name must be finite and non-negative."))
+    end
     config.gpu_threads > 0 || throw(ArgumentError("gpu_threads must be positive."))
     config.kernel_cutoff > 0 || throw(ArgumentError("kernel_cutoff must be positive."))
     config.max_frames >= 0 || throw(ArgumentError("max_frames must be non-negative."))
@@ -144,8 +156,14 @@ function normalize_live_config(config::LiveConfig)
         A=config.A,
         period=config.period,
         duty_cycle_percent=config.duty_cycle_percent,
+        Ge=config.Ge,
+        Gi=config.Gi,
         Se=config.Se,
         Si=config.Si,
+        Aee=config.Aee,
+        Aei=config.Aei,
+        Aie=config.Aie,
+        Aii=config.Aii,
         dt=config.dt,
         seed=config.seed,
         target_fps=target_fps,
@@ -255,8 +273,14 @@ function live_config_from_query(params::AbstractDict{String,String})
         A=_parse_float32(params, "A", 0.7f0),
         period=_parse_float32(params, "T", 115.0f0),
         duty_cycle_percent=_parse_optional_float32(params, "duty_cycle"),
+        Ge=_parse_float32(params, "Ge", 1.0f0),
+        Gi=_parse_float32(params, "Gi", 0.0f0),
         Se=_parse_float32(params, "Se", 2.0f0),
         Si=_parse_float32(params, "Si", 5.0f0),
+        Aee=_parse_float32(params, "Aee", 10.0f0),
+        Aei=_parse_float32(params, "Aei", 12.0f0),
+        Aie=_parse_float32(params, "Aie", 8.5f0),
+        Aii=_parse_float32(params, "Aii", 3.0f0),
         dt=_parse_float32(params, "dt", 0.2f0),
         seed=seed,
         target_fps=_parse_int(params, "fps", 30),
@@ -282,7 +306,15 @@ end
 # Runtime timing and frame encoding
 
 function _live_model_params(config::LiveConfig)
-    return ModelParams{Float32}(dt=config.dt)
+    return ModelParams{Float32}(
+        dt=config.dt,
+        Aee=config.Aee,
+        Aei=config.Aei,
+        Aie=config.Aie,
+        Aii=config.Aii,
+        Ge=config.Ge,
+        Gi=config.Gi,
+    )
 end
 
 function _live_runtime(config::LiveConfig)
@@ -1144,8 +1176,14 @@ function _hello_json(config::LiveConfig)
         ",\"A\":", _json_number(config.A),
         ",\"T\":", _json_number(config.period),
         ",\"dutyCycle\":", _json_number(config.duty_cycle_percent),
+        ",\"Ge\":", _json_number(config.Ge),
+        ",\"Gi\":", _json_number(config.Gi),
         ",\"Se\":", _json_number(config.Se),
         ",\"Si\":", _json_number(config.Si),
+        ",\"Aee\":", _json_number(config.Aee),
+        ",\"Aei\":", _json_number(config.Aei),
+        ",\"Aie\":", _json_number(config.Aie),
+        ",\"Aii\":", _json_number(config.Aii),
         ",\"dt\":", _json_number(config.dt),
         ",\"seed\":", _json_number(config.seed),
         ",\"kernelCutoff\":", _json_number(config.kernel_cutoff),
